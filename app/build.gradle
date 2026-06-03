@@ -1,0 +1,16 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.lamurbob28.devicedoctor"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.lamurbob28.devicedoctor"
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName "1.0"
+    }
+}
