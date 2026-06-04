@@ -2,16 +2,31 @@
 
 A small native Android diagnostic app. GitHub Actions compiles the APK.
 
+## Version 2.0
+
+Device Doctor now does more than display raw Android numbers. It scores the device and explains what needs attention.
+
 ## What it checks
 
-- Device model, manufacturer, Android version, and SDK level
+- Overall health score from 0 to 100
+- Good, warning, bad, and info cards
 - Battery level, charging state, temperature, health, voltage, and technology
-- Internal storage total/free/used space
-- Network type and internet validation status
-- Uptime and elapsed realtime
-- App runtime memory
+- Internal storage total/free/used space with fullness warnings
+- Network type, internet capability, and validation status
+- Uptime and restart recommendations
+- App/runtime memory pressure
 - Sensor count
 - Thermal status on supported Android versions
+- Security patch age
+
+## New in v2
+
+- Health score at the top
+- Problem cards shown first
+- Plain-English advice for each finding
+- Buttons that open relevant Android settings screens
+- Copy Full Report button
+- Full raw diagnostic report at the bottom
 
 ## Build
 
