@@ -2,9 +2,9 @@
 
 A small native Android diagnostic app. GitHub Actions compiles the APK.
 
-## Version 2.0
+## Version 2.1
 
-Device Doctor now does more than display raw Android numbers. It scores the device and explains what needs attention.
+Device Doctor now includes a deeper Network Doctor in addition to the v2 health score system.
 
 ## What it checks
 
@@ -19,7 +19,17 @@ Device Doctor now does more than display raw Android numbers. It scores the devi
 - Thermal status on supported Android versions
 - Security patch age
 
-## New in v2
+## New in v2.1
+
+- Network Doctor button
+- DNS lookup tests for google.com and cloudflare.com
+- TCP connection tests to 1.1.1.1:443 and 8.8.8.8:443
+- HTTPS reachability test using generate_204
+- Share Full Report button
+- Copy/share output includes the Network Doctor result
+- INTERNET permission added for network tests
+
+## From v2.0
 
 - Health score at the top
 - Problem cards shown first
