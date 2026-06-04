@@ -28,6 +28,11 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.URL;
 import java.text.DecimalFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -42,7 +47,9 @@ public class MainActivity extends Activity {
     private static final int INFO = 3;
 
     private LinearLayout reportLayout;
+    private TextView networkDoctorText;
     private ScanReport lastReport;
+    private String lastNetworkDoctorReport = "Network Doctor has not been run yet.";
     private final DecimalFormat oneDecimal = new DecimalFormat("0.0");
 
     @Override
@@ -65,21 +72,25 @@ public class MainActivity extends Activity {
         TextView title = text("Device Doctor", 30, true, 0xFFF1F1F1);
         root.addView(title);
 
-        TextView subtitle = text("Health score, warnings, and quick Android settings shortcuts.", 15, false, 0xFFB6BAC4);
+        TextView subtitle = text("Health score, warnings, quick fixes, and Network Doctor.", 15, false, 0xFFB6BAC4);
         subtitle.setPadding(0, dp(4), 0, dp(14));
         root.addView(subtitle);
 
-        Button refresh = new Button(this);
-        refresh.setText("Refresh Scan");
-        refresh.setAllCaps(false);
+        Button refresh = button("Refresh Scan");
         refresh.setOnClickListener(v -> refreshReport());
         root.addView(refresh);
 
-        Button copy = new Button(this);
-        copy.setText("Copy Full Report");
-        copy.setAllCaps(false);
+        Button network = button("Run Network Doctor");
+        network.setOnClickListener(v -> runNetworkDoctor());
+        root.addView(network);
+
+        Button copy = button("Copy Full Report");
         copy.setOnClickListener(v -> copyReport());
         root.addView(copy);
+
+        Button share = button("Share Full Report");
+        share.setOnClickListener(v -> shareReport());
+        root.addView(share);
 
         reportLayout = new LinearLayout(this);
         reportLayout.setOrientation(LinearLayout.VERTICAL);
@@ -92,48 +103,36 @@ public class MainActivity extends Activity {
     private void refreshReport() {
         lastReport = scanDevice();
         reportLayout.removeAllViews();
-
         addScoreCard(lastReport);
         addProblemsCard(lastReport);
+        addNetworkDoctorCard();
         addShortcutsCard();
         addRawReportCard(lastReport.rawReport);
     }
 
     private ScanReport scanDevice() {
         ScanReport report = new ScanReport();
-        report.timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date());
+        report.timestamp = now();
         report.score = 100;
 
         StringBuilder raw = new StringBuilder();
-        raw.append("Device Doctor v2.0 Report\n");
+        raw.append("Device Doctor v2.1 Report\n");
         raw.append("Scan time: ").append(report.timestamp).append("\n\n");
 
-        String manufacturer = safe(Build.MANUFACTURER);
-        String model = safe(Build.MODEL);
-        String android = safe(Build.VERSION.RELEASE);
         String securityPatch = safe(Build.VERSION.SECURITY_PATCH);
-        int sdk = Build.VERSION.SDK_INT;
-
         raw.append("DEVICE\n");
-        raw.append(line("Manufacturer", manufacturer));
-        raw.append(line("Model", model));
-        raw.append(line("Android", android));
-        raw.append(line("SDK", String.valueOf(sdk)));
+        raw.append(line("Manufacturer", safe(Build.MANUFACTURER)));
+        raw.append(line("Model", safe(Build.MODEL)));
+        raw.append(line("Device", safe(Build.DEVICE)));
+        raw.append(line("Brand", safe(Build.BRAND)));
+        raw.append(line("Android", safe(Build.VERSION.RELEASE)));
+        raw.append(line("SDK", String.valueOf(Build.VERSION.SDK_INT)));
         raw.append(line("Security patch", securityPatch));
         raw.append(line("Build ID", safe(Build.ID)));
         raw.append("\n");
-
         evaluateSecurityPatch(report, securityPatch);
 
-        int thermalStatus = -1;
-        if (Build.VERSION.SDK_INT >= 29) {
-            try {
-                PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-                thermalStatus = pm.getCurrentThermalStatus();
-            } catch (Exception ignored) {
-                thermalStatus = -1;
-            }
-        }
+        int thermalStatus = getThermalStatus();
         raw.append("THERMAL\n");
         raw.append(line("Thermal status", thermalStatus >= 0 ? thermalName(thermalStatus) : "Unavailable"));
         raw.append("\n");
@@ -201,7 +200,6 @@ public class MainActivity extends Activity {
 
         if (report.score < 0) report.score = 0;
         if (report.score > 100) report.score = 100;
-
         if (report.score >= 85 && report.badCount == 0) report.overallStatus = GOOD;
         else if (report.score >= 60) report.overallStatus = WARNING;
         else report.overallStatus = BAD;
@@ -217,62 +215,166 @@ public class MainActivity extends Activity {
         return report;
     }
 
-    private void evaluateBattery(ScanReport report, BatterySnapshot battery) {
-        if (battery.tempC < 0) {
-            addFinding(report, INFO, "Battery Temperature", "Temperature is unavailable.", "Android did not expose battery temperature on this scan.", 0, null, null);
-        } else if (battery.tempC >= 45) {
-            addFinding(report, BAD, "Battery Temperature", "Battery is very hot: " + oneDecimal.format(battery.tempC) + " C.", "Stop heavy use and let the phone cool down before charging or gaming.", 20, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
-        } else if (battery.tempC >= 40) {
-            addFinding(report, BAD, "Battery Temperature", "Battery is hot: " + oneDecimal.format(battery.tempC) + " C.", "Heat wears batteries down faster. Let it cool if possible.", 15, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
-        } else if (battery.tempC >= 35) {
-            addFinding(report, WARNING, "Battery Temperature", "Battery is warm: " + oneDecimal.format(battery.tempC) + " C.", "Warm is not panic mode, but avoid stacking heat with gaming plus charging.", 5, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
-        } else {
-            addFinding(report, GOOD, "Battery Temperature", "Battery temperature looks normal: " + oneDecimal.format(battery.tempC) + " C.", "No heat problem detected.", 0, null, null);
-        }
+    private void runNetworkDoctor() {
+        if (networkDoctorText != null) networkDoctorText.setText("Running network tests... hold still while the rectangle interrogates the internet.");
+        Toast.makeText(this, "Running Network Doctor", Toast.LENGTH_SHORT).show();
 
-        if (battery.health == BatteryManager.BATTERY_HEALTH_GOOD) {
-            addFinding(report, GOOD, "Battery Health", "Android reports battery health as good.", "Nothing concerning detected here.", 0, null, null);
-        } else if (battery.health <= 0 || battery.health == BatteryManager.BATTERY_HEALTH_UNKNOWN) {
-            addFinding(report, INFO, "Battery Health", "Battery health is unknown.", "Some devices do not expose useful battery health data.", 0, null, null);
+        new Thread(() -> {
+            String result = performNetworkDoctorTests();
+            lastNetworkDoctorReport = result;
+            runOnUiThread(() -> {
+                if (networkDoctorText != null) networkDoctorText.setText(result);
+                Toast.makeText(this, "Network Doctor finished", Toast.LENGTH_SHORT).show();
+            });
+        }).start();
+    }
+
+    private String performNetworkDoctorTests() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Network Doctor v2.1\n");
+        sb.append("Run time: ").append(now()).append("\n\n");
+
+        NetworkSnapshot network = getNetworkSnapshot();
+        sb.append(line("Android network type", network.type));
+        sb.append(line("Android validated", yesNo(network.validated)));
+        sb.append(line("Android internet capability", yesNo(network.hasInternet)));
+        sb.append("\n");
+
+        TimedResult dnsGoogle = timedDns("google.com");
+        TimedResult dnsCloudflare = timedDns("cloudflare.com");
+        TimedResult tcpCloudflare = timedTcp("1.1.1.1", 443, 3000);
+        TimedResult tcpGoogleDns = timedTcp("8.8.8.8", 443, 3000);
+        HttpResult http204 = timedHttp("https://www.google.com/generate_204", 5000);
+
+        sb.append("TESTS\n");
+        sb.append(formatTimed("DNS google.com", dnsGoogle));
+        sb.append(formatTimed("DNS cloudflare.com", dnsCloudflare));
+        sb.append(formatTimed("TCP 1.1.1.1:443", tcpCloudflare));
+        sb.append(formatTimed("TCP 8.8.8.8:443", tcpGoogleDns));
+        sb.append("HTTPS generate_204: ").append(http204.success ? "OK" : "FAILED")
+                .append(" in ").append(http204.ms).append(" ms")
+                .append(" (HTTP ").append(http204.code).append(")");
+        if (http204.error != null) sb.append(" - ").append(http204.error);
+        sb.append("\n\n");
+
+        int problems = 0;
+        if (!network.hasNetwork || !network.hasInternet) problems++;
+        if (!dnsGoogle.success && !dnsCloudflare.success) problems++;
+        if (!tcpCloudflare.success && !tcpGoogleDns.success) problems++;
+        if (!http204.success) problems++;
+        if (tcpCloudflare.success && tcpCloudflare.ms > 800) problems++;
+
+        sb.append("RESULT\n");
+        if (problems == 0) {
+            sb.append("Status: GOOD\n");
+            sb.append("Internet looks reachable. Latency and DNS are not screaming for help. Rare behavior from modern networking, honestly.\n");
+        } else if (problems <= 2) {
+            sb.append("Status: WARNING\n");
+            sb.append("Some network checks failed or looked slow. Try toggling Wi-Fi, switching networks, or restarting the router if this keeps happening.\n");
         } else {
-            addFinding(report, BAD, "Battery Health", "Android reports battery health as " + batteryHealthName(battery.health) + ".", "Keep an eye on charging, heat, and sudden shutdowns.", 20, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
+            sb.append("Status: BAD\n");
+            sb.append("Multiple network checks failed. This connection may be broken, captive, blocked, or cursed by router firmware.\n");
         }
+        return sb.toString();
+    }
+
+    private TimedResult timedDns(String host) {
+        long start = SystemClock.elapsedRealtime();
+        TimedResult result = new TimedResult();
+        try {
+            InetAddress[] addresses = InetAddress.getAllByName(host);
+            result.ms = SystemClock.elapsedRealtime() - start;
+            result.success = addresses != null && addresses.length > 0;
+            result.message = result.success ? addresses[0].getHostAddress() : "No addresses";
+        } catch (Exception e) {
+            result.ms = SystemClock.elapsedRealtime() - start;
+            result.success = false;
+            result.message = simpleError(e);
+        }
+        return result;
+    }
+
+    private TimedResult timedTcp(String host, int port, int timeoutMs) {
+        long start = SystemClock.elapsedRealtime();
+        TimedResult result = new TimedResult();
+        Socket socket = new Socket();
+        try {
+            socket.connect(new InetSocketAddress(host, port), timeoutMs);
+            result.ms = SystemClock.elapsedRealtime() - start;
+            result.success = true;
+            result.message = "Connected";
+        } catch (Exception e) {
+            result.ms = SystemClock.elapsedRealtime() - start;
+            result.success = false;
+            result.message = simpleError(e);
+        } finally {
+            try { socket.close(); } catch (Exception ignored) { }
+        }
+        return result;
+    }
+
+    private HttpResult timedHttp(String urlText, int timeoutMs) {
+        long start = SystemClock.elapsedRealtime();
+        HttpResult result = new HttpResult();
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(urlText);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setConnectTimeout(timeoutMs);
+            connection.setReadTimeout(timeoutMs);
+            connection.setUseCaches(false);
+            connection.setInstanceFollowRedirects(false);
+            connection.connect();
+            result.code = connection.getResponseCode();
+            result.ms = SystemClock.elapsedRealtime() - start;
+            result.success = result.code >= 200 && result.code < 400;
+        } catch (Exception e) {
+            result.ms = SystemClock.elapsedRealtime() - start;
+            result.code = -1;
+            result.success = false;
+            result.error = simpleError(e);
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+        return result;
+    }
+
+    private String formatTimed(String label, TimedResult result) {
+        String status = result.success ? "OK" : "FAILED";
+        return label + ": " + status + " in " + result.ms + " ms - " + result.message + "\n";
+    }
+
+    private void evaluateBattery(ScanReport report, BatterySnapshot battery) {
+        if (battery.tempC < 0) addFinding(report, INFO, "Battery Temperature", "Temperature is unavailable.", "Android did not expose battery temperature on this scan.", 0, null, null);
+        else if (battery.tempC >= 45) addFinding(report, BAD, "Battery Temperature", "Battery is very hot: " + oneDecimal.format(battery.tempC) + " C.", "Stop heavy use and let the phone cool down before charging or gaming.", 20, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
+        else if (battery.tempC >= 40) addFinding(report, BAD, "Battery Temperature", "Battery is hot: " + oneDecimal.format(battery.tempC) + " C.", "Heat wears batteries down faster. Let it cool if possible.", 15, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
+        else if (battery.tempC >= 35) addFinding(report, WARNING, "Battery Temperature", "Battery is warm: " + oneDecimal.format(battery.tempC) + " C.", "Warm is not panic mode, but avoid stacking heat with gaming plus charging.", 5, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
+        else addFinding(report, GOOD, "Battery Temperature", "Battery temperature looks normal: " + oneDecimal.format(battery.tempC) + " C.", "No heat problem detected.", 0, null, null);
+
+        if (battery.health == BatteryManager.BATTERY_HEALTH_GOOD) addFinding(report, GOOD, "Battery Health", "Android reports battery health as good.", "Nothing concerning detected here.", 0, null, null);
+        else if (battery.health <= 0 || battery.health == BatteryManager.BATTERY_HEALTH_UNKNOWN) addFinding(report, INFO, "Battery Health", "Battery health is unknown.", "Some devices do not expose useful battery health data.", 0, null, null);
+        else addFinding(report, BAD, "Battery Health", "Android reports battery health as " + batteryHealthName(battery.health) + ".", "Keep an eye on charging, heat, and sudden shutdowns.", 20, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
     }
 
     private void evaluateStorage(ScanReport report, StorageSnapshot storage) {
-        if (storage.usedPct >= 95) {
-            addFinding(report, BAD, "Storage", "Storage is critically full: " + oneDecimal.format(storage.usedPct) + "% used.", "Free space soon. Android can get weird when storage is packed full.", 30, "Open Storage Settings", "android.settings.INTERNAL_STORAGE_SETTINGS");
-        } else if (storage.usedPct >= 90) {
-            addFinding(report, BAD, "Storage", "Storage is very full: " + oneDecimal.format(storage.usedPct) + "% used.", "Clear downloads, videos, cache, or unused apps.", 20, "Open Storage Settings", "android.settings.INTERNAL_STORAGE_SETTINGS");
-        } else if (storage.usedPct >= 80) {
-            addFinding(report, WARNING, "Storage", "Storage is getting high: " + oneDecimal.format(storage.usedPct) + "% used.", "Cleanup is not urgent, but it is getting close to annoying.", 10, "Open Storage Settings", "android.settings.INTERNAL_STORAGE_SETTINGS");
-        } else {
-            addFinding(report, GOOD, "Storage", "Storage looks okay: " + oneDecimal.format(storage.usedPct) + "% used.", "Free space is not currently a problem.", 0, null, null);
-        }
+        if (storage.usedPct >= 95) addFinding(report, BAD, "Storage", "Storage is critically full: " + oneDecimal.format(storage.usedPct) + "% used.", "Free space soon. Android can get weird when storage is packed full.", 30, "Open Storage Settings", "android.settings.INTERNAL_STORAGE_SETTINGS");
+        else if (storage.usedPct >= 90) addFinding(report, BAD, "Storage", "Storage is very full: " + oneDecimal.format(storage.usedPct) + "% used.", "Clear downloads, videos, cache, or unused apps.", 20, "Open Storage Settings", "android.settings.INTERNAL_STORAGE_SETTINGS");
+        else if (storage.usedPct >= 80) addFinding(report, WARNING, "Storage", "Storage is getting high: " + oneDecimal.format(storage.usedPct) + "% used.", "Cleanup is not urgent, but it is getting close to annoying.", 10, "Open Storage Settings", "android.settings.INTERNAL_STORAGE_SETTINGS");
+        else addFinding(report, GOOD, "Storage", "Storage looks okay: " + oneDecimal.format(storage.usedPct) + "% used.", "Free space is not currently a problem.", 0, null, null);
     }
 
     private void evaluateNetwork(ScanReport report, NetworkSnapshot network) {
-        if (!network.hasNetwork) {
-            addFinding(report, BAD, "Network", "No active network detected.", "Connect to Wi-Fi or mobile data if you expected internet.", 20, "Open Wi-Fi Settings", "android.settings.WIFI_SETTINGS");
-        } else if (!network.hasInternet) {
-            addFinding(report, BAD, "Network", "A network exists, but Android does not see internet capability.", "Reconnect or switch networks.", 20, "Open Wi-Fi Settings", "android.settings.WIFI_SETTINGS");
-        } else if (!network.validated) {
-            addFinding(report, WARNING, "Network", "Connected, but Android has not validated real internet.", "Wi-Fi may be stuck, blocked, or waiting for a login page.", 10, "Open Wi-Fi Settings", "android.settings.WIFI_SETTINGS");
-        } else {
-            addFinding(report, GOOD, "Network", "Internet connection is validated on " + network.type + ".", "Network looks normal from Android's view.", 0, null, null);
-        }
+        if (!network.hasNetwork) addFinding(report, BAD, "Network", "No active network detected.", "Connect to Wi-Fi or mobile data if you expected internet.", 20, "Open Wi-Fi Settings", "android.settings.WIFI_SETTINGS");
+        else if (!network.hasInternet) addFinding(report, BAD, "Network", "A network exists, but Android does not see internet capability.", "Reconnect or switch networks.", 20, "Open Wi-Fi Settings", "android.settings.WIFI_SETTINGS");
+        else if (!network.validated) addFinding(report, WARNING, "Network", "Connected, but Android has not validated real internet.", "Run Network Doctor, reconnect Wi-Fi, or check for a login page.", 10, "Open Wi-Fi Settings", "android.settings.WIFI_SETTINGS");
+        else addFinding(report, GOOD, "Network", "Internet connection is validated on " + network.type + ".", "Network looks normal from Android's view. Run Network Doctor for deeper checks.", 0, null, null);
 
-        if (network.hasNetwork && !network.notMetered) {
-            addFinding(report, INFO, "Metered Network", "This connection may be metered.", "Large downloads may use mobile data or a limited connection.", 0, "Open Network Settings", "android.settings.WIRELESS_SETTINGS");
-        }
+        if (network.hasNetwork && !network.notMetered) addFinding(report, INFO, "Metered Network", "This connection may be metered.", "Large downloads may use mobile data or a limited connection.", 0, "Open Network Settings", "android.settings.WIRELESS_SETTINGS");
     }
 
     private void evaluateMemory(ScanReport report, MemorySnapshot memory) {
-        if (memory.lowMemory) {
-            addFinding(report, WARNING, "Memory", "Android reports low memory pressure.", "Close heavy apps or restart if the phone feels sluggish.", 10, "Open App Settings", "APP_DETAILS");
-        } else {
-            addFinding(report, GOOD, "Memory", "Android is not reporting low memory pressure.", "No RAM emergency detected. Fake RAM boosters may remain unemployed.", 0, null, null);
-        }
+        if (memory.lowMemory) addFinding(report, WARNING, "Memory", "Android reports low memory pressure.", "Close heavy apps or restart if the phone feels sluggish.", 10, "Open App Settings", "APP_DETAILS");
+        else addFinding(report, GOOD, "Memory", "Android is not reporting low memory pressure.", "No RAM emergency detected. Fake RAM boosters may remain unemployed.", 0, null, null);
     }
 
     private void evaluateThermal(ScanReport report, int thermalStatus) {
@@ -280,44 +382,27 @@ public class MainActivity extends Activity {
             addFinding(report, INFO, "Thermals", "Thermal status is unavailable.", "This device or Android version may not expose thermal status.", 0, null, null);
             return;
         }
-
-        if (thermalStatus == PowerManager.THERMAL_STATUS_NONE) {
-            addFinding(report, GOOD, "Thermals", "System thermal status is normal.", "No device-level thermal throttling reported.", 0, null, null);
-        } else if (thermalStatus == PowerManager.THERMAL_STATUS_LIGHT) {
-            addFinding(report, WARNING, "Thermals", "System thermal status is light.", "The phone is slightly warm at the system level.", 5, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
-        } else if (thermalStatus == PowerManager.THERMAL_STATUS_MODERATE) {
-            addFinding(report, WARNING, "Thermals", "System thermal status is moderate.", "Let the device cool if performance feels worse.", 10, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
-        } else {
-            addFinding(report, BAD, "Thermals", "System thermal status is " + thermalName(thermalStatus) + ".", "Stop heavy use and let the phone cool down.", 25, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
-        }
+        if (thermalStatus == PowerManager.THERMAL_STATUS_NONE) addFinding(report, GOOD, "Thermals", "System thermal status is normal.", "No device-level thermal throttling reported.", 0, null, null);
+        else if (thermalStatus == PowerManager.THERMAL_STATUS_LIGHT) addFinding(report, WARNING, "Thermals", "System thermal status is light.", "The phone is slightly warm at the system level.", 5, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
+        else if (thermalStatus == PowerManager.THERMAL_STATUS_MODERATE) addFinding(report, WARNING, "Thermals", "System thermal status is moderate.", "Let the device cool if performance feels worse.", 10, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
+        else addFinding(report, BAD, "Thermals", "System thermal status is " + thermalName(thermalStatus) + ".", "Stop heavy use and let the phone cool down.", 25, "Open Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
     }
 
     private void evaluateSecurityPatch(ScanReport report, String patch) {
         long days = securityPatchAgeDays(patch);
-        if (days < 0) {
-            addFinding(report, INFO, "Security Patch", "Security patch date is unavailable.", "Check Android updates manually if this looks wrong.", 0, "Open System Update", "android.settings.SYSTEM_UPDATE_SETTINGS");
-        } else if (days <= 90) {
-            addFinding(report, GOOD, "Security Patch", "Security patch is recent: " + patch + ".", "Patch age is about " + days + " days.", 0, null, null);
-        } else if (days <= 180) {
-            addFinding(report, WARNING, "Security Patch", "Security patch is aging: " + patch + ".", "Patch age is about " + days + " days. Check for updates.", 5, "Open System Update", "android.settings.SYSTEM_UPDATE_SETTINGS");
-        } else if (days <= 365) {
-            addFinding(report, WARNING, "Security Patch", "Security patch is stale: " + patch + ".", "Patch age is about " + days + " days. System update check recommended.", 10, "Open System Update", "android.settings.SYSTEM_UPDATE_SETTINGS");
-        } else {
-            addFinding(report, BAD, "Security Patch", "Security patch is very old: " + patch + ".", "Patch age is about " + days + " days. Update if your phone offers one.", 20, "Open System Update", "android.settings.SYSTEM_UPDATE_SETTINGS");
-        }
+        if (days < 0) addFinding(report, INFO, "Security Patch", "Security patch date is unavailable.", "Check Android updates manually if this looks wrong.", 0, "Open System Update", "android.settings.SYSTEM_UPDATE_SETTINGS");
+        else if (days <= 90) addFinding(report, GOOD, "Security Patch", "Security patch is recent: " + patch + ".", "Patch age is about " + days + " days.", 0, null, null);
+        else if (days <= 180) addFinding(report, WARNING, "Security Patch", "Security patch is aging: " + patch + ".", "Patch age is about " + days + " days. Check for updates.", 5, "Open System Update", "android.settings.SYSTEM_UPDATE_SETTINGS");
+        else if (days <= 365) addFinding(report, WARNING, "Security Patch", "Security patch is stale: " + patch + ".", "Patch age is about " + days + " days. System update check recommended.", 10, "Open System Update", "android.settings.SYSTEM_UPDATE_SETTINGS");
+        else addFinding(report, BAD, "Security Patch", "Security patch is very old: " + patch + ".", "Patch age is about " + days + " days. Update if your phone offers one.", 20, "Open System Update", "android.settings.SYSTEM_UPDATE_SETTINGS");
     }
 
     private void evaluateUptime(ScanReport report, long elapsedMs) {
         long days = elapsedMs / 86400000L;
-        if (days >= 30) {
-            addFinding(report, WARNING, "Uptime", "Phone has been running for " + days + " days since boot.", "Restarting can clear weird background-service problems.", 15, "Open Device Settings", "android.settings.SETTINGS");
-        } else if (days >= 14) {
-            addFinding(report, WARNING, "Uptime", "Phone has been running for " + days + " days since boot.", "A restart may help if anything feels strange.", 10, "Open Device Settings", "android.settings.SETTINGS");
-        } else if (days >= 7) {
-            addFinding(report, WARNING, "Uptime", "Phone has been running for " + days + " days since boot.", "Not terrible, but a restart can freshen things up.", 5, "Open Device Settings", "android.settings.SETTINGS");
-        } else {
-            addFinding(report, GOOD, "Uptime", "Recent boot: " + duration(elapsedMs) + " since startup.", "No restart recommendation right now.", 0, null, null);
-        }
+        if (days >= 30) addFinding(report, WARNING, "Uptime", "Phone has been running for " + days + " days since boot.", "Restarting can clear weird background-service problems.", 15, "Open Device Settings", "android.settings.SETTINGS");
+        else if (days >= 14) addFinding(report, WARNING, "Uptime", "Phone has been running for " + days + " days since boot.", "A restart may help if anything feels strange.", 10, "Open Device Settings", "android.settings.SETTINGS");
+        else if (days >= 7) addFinding(report, WARNING, "Uptime", "Phone has been running for " + days + " days since boot.", "Not terrible, but a restart can freshen things up.", 5, "Open Device Settings", "android.settings.SETTINGS");
+        else addFinding(report, GOOD, "Uptime", "Recent boot: " + duration(elapsedMs) + " since startup.", "No restart recommendation right now.", 0, null, null);
     }
 
     private void addFinding(ScanReport report, int severity, String title, String details, String advice, int penalty, String actionLabel, String action) {
@@ -329,10 +414,8 @@ public class MainActivity extends Activity {
         f.penalty = penalty;
         f.actionLabel = actionLabel;
         f.action = action;
-
         report.findings.add(f);
         report.score -= penalty;
-
         if (severity == BAD) report.badCount++;
         else if (severity == WARNING) report.warningCount++;
         else if (severity == GOOD) report.goodCount++;
@@ -343,7 +426,6 @@ public class MainActivity extends Activity {
         BatterySnapshot out = new BatterySnapshot();
         Intent battery = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         if (battery == null) return out;
-
         int level = battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
         int scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
         out.percent = (level >= 0 && scale > 0) ? Math.round(level * 100f / scale) : -1;
@@ -375,23 +457,18 @@ public class MainActivity extends Activity {
         out.type = "None";
         out.downKbps = -1;
         out.upKbps = -1;
-
         ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         if (cm == null) return out;
-
         Network network = cm.getActiveNetwork();
         if (network == null) return out;
-
         out.hasNetwork = true;
         NetworkCapabilities caps = cm.getNetworkCapabilities(network);
         if (caps == null) return out;
-
         if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) out.type = "Wi-Fi";
         else if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) out.type = "Cellular";
         else if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) out.type = "Ethernet";
         else if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) out.type = "VPN";
         else out.type = "Other";
-
         out.hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
         out.validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
         out.notMetered = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
@@ -410,7 +487,6 @@ public class MainActivity extends Activity {
             out.lowMemory = info.lowMemory;
             out.threshold = info.threshold;
         }
-
         Runtime rt = Runtime.getRuntime();
         out.appMax = rt.maxMemory();
         long appTotal = rt.totalMemory();
@@ -424,7 +500,6 @@ public class MainActivity extends Activity {
         SensorSnapshot out = new SensorSnapshot();
         SensorManager sm = (SensorManager) getSystemService(SENSOR_SERVICE);
         if (sm == null) return out;
-
         List<Sensor> sensors = sm.getSensorList(Sensor.TYPE_ALL);
         out.total = sensors.size();
         int limit = Math.min(8, sensors.size());
@@ -433,19 +508,24 @@ public class MainActivity extends Activity {
         return out;
     }
 
+    private int getThermalStatus() {
+        if (Build.VERSION.SDK_INT < 29) return -1;
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            return pm.getCurrentThermalStatus();
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
     private void addScoreCard(ScanReport report) {
         LinearLayout card = newCard();
-        TextView title = text("Overall Health", 20, true, 0xFFF1F1F1);
-        card.addView(title);
-
+        card.addView(text("Overall Health", 20, true, 0xFFF1F1F1));
         TextView score = text(report.score + "/100  -  " + statusName(report.overallStatus), 32, true, statusColor(report.overallStatus));
         score.setPadding(0, dp(6), 0, dp(6));
         card.addView(score);
-
-        String summary = report.badCount + " bad, " + report.warningCount + " warnings, " + report.goodCount + " good, " + report.infoCount + " info\n"
-                + "Last scan: " + report.timestamp;
+        String summary = report.badCount + " bad, " + report.warningCount + " warnings, " + report.goodCount + " good, " + report.infoCount + " info\nLast scan: " + report.timestamp;
         card.addView(text(summary, 14, false, 0xFFB6BAC4));
-
         reportLayout.addView(card);
     }
 
@@ -453,7 +533,6 @@ public class MainActivity extends Activity {
         TextView heading = text("Diagnosis", 22, true, 0xFFF1F1F1);
         heading.setPadding(0, dp(4), 0, dp(8));
         reportLayout.addView(heading);
-
         boolean showedProblem = false;
         for (Finding f : report.findings) {
             if (f.severity == BAD || f.severity == WARNING) {
@@ -461,15 +540,10 @@ public class MainActivity extends Activity {
                 showedProblem = true;
             }
         }
-
-        if (!showedProblem) {
-            addCard("No major problems found", "Nothing bad or warning-level showed up in this scan. Suspiciously competent behavior from a phone.");
-        }
-
+        if (!showedProblem) addCard("No major problems found", "Nothing bad or warning-level showed up in this scan. Suspiciously competent behavior from a phone.");
         TextView goodHeading = text("Other Checks", 20, true, 0xFFF1F1F1);
         goodHeading.setPadding(0, dp(6), 0, dp(8));
         reportLayout.addView(goodHeading);
-
         for (Finding f : report.findings) {
             if (f.severity == GOOD || f.severity == INFO) addFindingCard(f);
         }
@@ -477,25 +551,28 @@ public class MainActivity extends Activity {
 
     private void addFindingCard(Finding f) {
         LinearLayout card = newCard();
-
-        TextView title = text(f.title + "  -  " + statusName(f.severity), 18, true, statusColor(f.severity));
-        card.addView(title);
-
+        card.addView(text(f.title + "  -  " + statusName(f.severity), 18, true, statusColor(f.severity)));
         TextView details = text(f.details, 14, false, 0xFFF1F1F1);
         details.setPadding(0, dp(7), 0, dp(3));
         card.addView(details);
-
-        TextView advice = text(f.advice, 14, false, 0xFFB6BAC4);
-        card.addView(advice);
-
+        card.addView(text(f.advice, 14, false, 0xFFB6BAC4));
         if (f.action != null && f.actionLabel != null) {
-            Button action = new Button(this);
-            action.setText(f.actionLabel);
-            action.setAllCaps(false);
+            Button action = button(f.actionLabel);
             action.setOnClickListener(v -> openSettingsAction(f.action));
             card.addView(action);
         }
+        reportLayout.addView(card);
+    }
 
+    private void addNetworkDoctorCard() {
+        LinearLayout card = newCard();
+        card.addView(text("Network Doctor", 20, true, 0xFFF1F1F1));
+        networkDoctorText = text(lastNetworkDoctorReport, 14, false, 0xFFB6BAC4);
+        networkDoctorText.setPadding(0, dp(6), 0, dp(8));
+        card.addView(networkDoctorText);
+        Button run = button("Run Network Doctor");
+        run.setOnClickListener(v -> runNetworkDoctor());
+        card.addView(run);
         reportLayout.addView(card);
     }
 
@@ -505,20 +582,16 @@ public class MainActivity extends Activity {
         TextView hint = text("These open Android settings. The app does not delete anything by itself.", 14, false, 0xFFB6BAC4);
         hint.setPadding(0, dp(4), 0, dp(8));
         card.addView(hint);
-
         addShortcutButton(card, "Storage Settings", "android.settings.INTERNAL_STORAGE_SETTINGS");
         addShortcutButton(card, "Battery Settings", "android.settings.BATTERY_SAVER_SETTINGS");
         addShortcutButton(card, "Wi-Fi Settings", "android.settings.WIFI_SETTINGS");
         addShortcutButton(card, "System Update", "android.settings.SYSTEM_UPDATE_SETTINGS");
         addShortcutButton(card, "This App Info", "APP_DETAILS");
-
         reportLayout.addView(card);
     }
 
     private void addShortcutButton(LinearLayout card, String label, String action) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setAllCaps(false);
+        Button button = button(label);
         button.setOnClickListener(v -> openSettingsAction(action));
         card.addView(button);
     }
@@ -540,27 +613,41 @@ public class MainActivity extends Activity {
 
     private void addCard(String heading, String body) {
         LinearLayout card = newCard();
-
         TextView h = text(heading, 19, true, 0xFFF1F1F1);
         h.setPadding(0, 0, 0, dp(7));
         card.addView(h);
-
         TextView b = text(body.trim(), 14, false, 0xFFB6BAC4);
         b.setLineSpacing(0, 1.08f);
         card.addView(b);
-
         reportLayout.addView(card);
     }
 
+    private Button button(String label) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setAllCaps(false);
+        return button;
+    }
+
     private void copyReport() {
-        if (lastReport == null) refreshReport();
         ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        if (clipboard != null && lastReport != null) {
-            clipboard.setPrimaryClip(ClipData.newPlainText("Device Doctor Report", lastReport.rawReport));
+        if (clipboard != null) {
+            clipboard.setPrimaryClip(ClipData.newPlainText("Device Doctor Report", combinedReport()));
             Toast.makeText(this, "Report copied", Toast.LENGTH_SHORT).show();
-        } else {
-            Toast.makeText(this, "Could not copy report", Toast.LENGTH_SHORT).show();
-        }
+        } else Toast.makeText(this, "Could not copy report", Toast.LENGTH_SHORT).show();
+    }
+
+    private void shareReport() {
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(Intent.EXTRA_SUBJECT, "Device Doctor Report");
+        send.putExtra(Intent.EXTRA_TEXT, combinedReport());
+        startActivity(Intent.createChooser(send, "Share Device Doctor Report"));
+    }
+
+    private String combinedReport() {
+        if (lastReport == null) lastReport = scanDevice();
+        return lastReport.rawReport + "\n\n" + lastNetworkDoctorReport;
     }
 
     private void openSettingsAction(String action) {
@@ -569,16 +656,11 @@ public class MainActivity extends Activity {
             if ("APP_DETAILS".equals(action)) {
                 intent = new Intent("android.settings.APPLICATION_DETAILS_SETTINGS");
                 intent.setData(Uri.parse("package:" + getPackageName()));
-            } else {
-                intent = new Intent(action);
-            }
+            } else intent = new Intent(action);
             startActivity(intent);
         } catch (Exception firstFailure) {
-            try {
-                startActivity(new Intent(Settings.ACTION_SETTINGS));
-            } catch (Exception secondFailure) {
-                Toast.makeText(this, "Could not open settings", Toast.LENGTH_SHORT).show();
-            }
+            try { startActivity(new Intent(Settings.ACTION_SETTINGS)); }
+            catch (Exception secondFailure) { Toast.makeText(this, "Could not open settings", Toast.LENGTH_SHORT).show(); }
         }
     }
 
@@ -606,17 +688,11 @@ public class MainActivity extends Activity {
         return "INFO";
     }
 
-    private String line(String label, String value) {
-        return label + ": " + value + "\n";
-    }
-
-    private String yesNo(boolean b) {
-        return b ? "Yes" : "No";
-    }
-
-    private String safe(String value) {
-        return value == null || value.trim().length() == 0 ? "Unknown" : value;
-    }
+    private String line(String label, String value) { return label + ": " + value + "\n"; }
+    private String yesNo(boolean b) { return b ? "Yes" : "No"; }
+    private String safe(String value) { return value == null || value.trim().length() == 0 ? "Unknown" : value; }
+    private String now() { return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()); }
+    private String simpleError(Exception e) { return e.getClass().getSimpleName() + (e.getMessage() != null ? ": " + e.getMessage() : ""); }
 
     private String bytes(long value) {
         double gb = value / 1024.0 / 1024.0 / 1024.0;
@@ -634,12 +710,8 @@ public class MainActivity extends Activity {
     }
 
     private String systemSetting(String key) {
-        try {
-            int value = Settings.Global.getInt(getContentResolver(), key);
-            return value == 1 ? "Enabled" : "Disabled";
-        } catch (Exception e) {
-            return "Unknown";
-        }
+        try { return Settings.Global.getInt(getContentResolver(), key) == 1 ? "Enabled" : "Disabled"; }
+        catch (Exception e) { return "Unknown"; }
     }
 
     private long securityPatchAgeDays(String patch) {
@@ -652,9 +724,7 @@ public class MainActivity extends Activity {
             long diff = System.currentTimeMillis() - patchDate.getTime();
             if (diff < 0) return 0;
             return diff / 86400000L;
-        } catch (Exception e) {
-            return -1;
-        }
+        } catch (Exception e) { return -1; }
     }
 
     private String batteryStatusName(int status) {
@@ -701,9 +771,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 
     private static class ScanReport {
         int score;
@@ -737,35 +805,10 @@ public class MainActivity extends Activity {
         String technology = "Unknown";
     }
 
-    private static class StorageSnapshot {
-        long total;
-        long used;
-        long free;
-        double usedPct;
-    }
-
-    private static class NetworkSnapshot {
-        boolean hasNetwork;
-        boolean hasInternet;
-        boolean validated;
-        boolean notMetered;
-        String type;
-        int downKbps;
-        int upKbps;
-    }
-
-    private static class MemorySnapshot {
-        long availMem;
-        boolean lowMemory;
-        long threshold;
-        long appMax;
-        long appUsed;
-        long appFree;
-    }
-
-    private static class SensorSnapshot {
-        int total;
-        int more;
-        final List<String> preview = new ArrayList<>();
-    }
+    private static class StorageSnapshot { long total; long used; long free; double usedPct; }
+    private static class NetworkSnapshot { boolean hasNetwork; boolean hasInternet; boolean validated; boolean notMetered; String type; int downKbps; int upKbps; }
+    private static class MemorySnapshot { long availMem; boolean lowMemory; long threshold; long appMax; long appUsed; long appFree; }
+    private static class SensorSnapshot { int total; int more; final List<String> preview = new ArrayList<>(); }
+    private static class TimedResult { boolean success; long ms; String message; }
+    private static class HttpResult { boolean success; long ms; int code; String error; }
 }
