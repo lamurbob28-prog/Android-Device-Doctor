@@ -2,9 +2,9 @@
 
 A small native Android diagnostic app. GitHub Actions compiles the APK.
 
-## Version 2.1
+## Version 2.2
 
-Device Doctor now includes a deeper Network Doctor in addition to the v2 health score system.
+Device Doctor now includes Smart Summary and local scan history, so the report says what changed instead of dumping raw numbers like a bureaucratic refrigerator.
 
 ## What it checks
 
@@ -19,24 +19,23 @@ Device Doctor now includes a deeper Network Doctor in addition to the v2 health 
 - Thermal status on supported Android versions
 - Security patch age
 
-## New in v2.1
+## New in v2.2
+
+- Smart Summary card
+- What Changed card
+- Local last-scan history using SharedPreferences
+- Copy Smart Report button
+- Share Smart Report button
+- Clearer warning list at the top of the report
+- Compares score, storage usage, battery temperature, security patch, and network validation with the previous scan
+
+## From v2.1
 
 - Network Doctor button
 - DNS lookup tests for google.com and cloudflare.com
 - TCP connection tests to 1.1.1.1:443 and 8.8.8.8:443
 - HTTPS reachability test using generate_204
-- Share Full Report button
-- Copy/share output includes the Network Doctor result
-- INTERNET permission added for network tests
-
-## From v2.0
-
-- Health score at the top
-- Problem cards shown first
-- Plain-English advice for each finding
-- Buttons that open relevant Android settings screens
-- Copy Full Report button
-- Full raw diagnostic report at the bottom
+- INTERNET permission for network tests
 
 ## Build
 
