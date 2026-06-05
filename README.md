@@ -2,9 +2,9 @@
 
 A small native Android diagnostic app. GitHub Actions compiles the APK.
 
-## Version 3.0.1
+## Version 3.1
 
-Device Doctor v3.0.1 is a cleanup release after the v3 dashboard upgrade. It removes duplicate Network Doctor buttons and keeps one real Network Doctor card where the results actually appear.
+Device Doctor v3.1 is a codebase cleanup release after the fast v1-v3 sprint. It keeps the v3 dashboard features, but stops using the stacked activity inheritance chain as the active launcher path.
 
 ## What it checks
 
@@ -19,14 +19,16 @@ Device Doctor v3.0.1 is a cleanup release after the v3 dashboard upgrade. It rem
 - Thermal status on supported Android versions
 - Security patch age
 
-## New in v3.0.1
+## New in v3.1
 
-- Removes duplicate Network Doctor buttons from the top controls and dashboard
-- Keeps one Network Doctor card with the actual test output
-- Updates internal report labels to v3.0.1
-- Keeps the v3 dashboard, history, storage doctor, update verifier, and network tests
+- `MainActivity` now launches `CleanDeviceDoctorActivity`
+- Active app path is a single cleaner implementation instead of `MainActivity -> V301 -> V30 -> V23 -> base`
+- MIT license added
+- Cleanup notes added in `docs/V3_1_CLEANUP.md`
+- Keeps one real Network Doctor card
+- Keeps dashboard, update verifier, history center, storage doctor, smart summary, and what-changed report
 
-## From v3.0
+## From v3.0 / v3.0.1
 
 - V3 Dashboard card
 - Top issues summary inside the dashboard
@@ -35,7 +37,7 @@ Device Doctor v3.0.1 is a cleanup release after the v3 dashboard upgrade. It rem
 - Storage Doctor Lite card
 - Storage trend comparison against the previous scan
 - Cleanup checklist and direct storage/app settings buttons
-- Cleaner report flow: dashboard, summary, update verifier, history, storage, diagnosis, network, shortcuts, raw details
+- Duplicate Network Doctor buttons removed
 
 ## From v2.3
 
