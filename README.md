@@ -2,9 +2,9 @@
 
 A small native Android diagnostic app. GitHub Actions compiles the APK.
 
-## Version 2.3
+## Version 3.0
 
-Device Doctor now includes a System Update Verifier, because the app already caught an outdated security patch and apparently decided to become useful. Disturbing development.
+Device Doctor v3.0 turns the app into a clearer diagnostic dashboard instead of one giant report scroll. Because apparently useful software requires us to fight entropy one card at a time.
 
 ## What it checks
 
@@ -19,19 +19,30 @@ Device Doctor now includes a System Update Verifier, because the app already cau
 - Thermal status on supported Android versions
 - Security patch age
 
-## New in v2.3
+## New in v3.0
+
+- V3 Dashboard card
+- Top issues summary inside the dashboard
+- History Center with up to 10 stored scans
+- Reset History button
+- Storage Doctor Lite card
+- Storage trend comparison against the previous scan
+- Cleanup checklist and direct storage/app settings buttons
+- Cleaner report flow: dashboard, summary, update verifier, history, storage, diagnosis, network, shortcuts, raw details
+
+## From v2.3
 
 - System Update Verifier card
 - Shows current Android security patch age
 - Compares current patch against the previous scan
 - Confirms when an update actually changed the patch date
-- Adds a direct Open System Update button inside the verifier
+- Direct Open System Update button inside the verifier
 
 ## From v2.2
 
 - Smart Summary card
 - What Changed card
-- Local last-scan history using SharedPreferences
+- Local scan history using SharedPreferences
 - Copy Smart Report button
 - Share Smart Report button
 - Clearer warning list at the top of the report
