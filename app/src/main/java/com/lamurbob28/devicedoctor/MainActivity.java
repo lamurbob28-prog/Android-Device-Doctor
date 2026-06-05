@@ -1,4 +1,4 @@
 package com.lamurbob28.devicedoctor;
 
-public class MainActivity extends DoctorActivityV301 {
+public class MainActivity extends CleanDeviceDoctorActivity {
 }
