@@ -2,9 +2,9 @@
 
 A small native Android diagnostic app. GitHub Actions compiles the APK.
 
-## Version 3.0
+## Version 3.0.1
 
-Device Doctor v3.0 turns the app into a clearer diagnostic dashboard instead of one giant report scroll. Because apparently useful software requires us to fight entropy one card at a time.
+Device Doctor v3.0.1 is a cleanup release after the v3 dashboard upgrade. It removes duplicate Network Doctor buttons and keeps one real Network Doctor card where the results actually appear.
 
 ## What it checks
 
@@ -19,7 +19,14 @@ Device Doctor v3.0 turns the app into a clearer diagnostic dashboard instead of 
 - Thermal status on supported Android versions
 - Security patch age
 
-## New in v3.0
+## New in v3.0.1
+
+- Removes duplicate Network Doctor buttons from the top controls and dashboard
+- Keeps one Network Doctor card with the actual test output
+- Updates internal report labels to v3.0.1
+- Keeps the v3 dashboard, history, storage doctor, update verifier, and network tests
+
+## From v3.0
 
 - V3 Dashboard card
 - Top issues summary inside the dashboard
