@@ -9,7 +9,7 @@
         android:resizeableActivity="true"
         android:usesCleartextTraffic="false">
         <activity
-            android:name=".MainActivity"
+            android:name=".v4.V4MainActivity"
             android:screenOrientation="portrait"
             android:exported="true">
             <intent-filter>
