@@ -4,7 +4,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
@@ -111,6 +110,7 @@ fun Dashboard(report: ScanReport) {
 @Composable
 fun UpdateVerifier(report: ScanReport, previous: ScanEntity?) {
     val scan = report.scan
+    val context = LocalContext.current
     InfoCard("System Update Verifier", buildString {
         appendLine("Current security patch: ${scan.securityPatch}")
         appendLine(if (scan.patchAgeDays >= 0) "Approx patch age: ${scan.patchAgeDays} days" else "Approx patch age: unavailable")
@@ -124,7 +124,7 @@ fun UpdateVerifier(report: ScanReport, previous: ScanEntity?) {
             appendLine("Previous patch: ${previous.securityPatch}")
             appendLine("Result: patch unchanged since last scan.")
         }
-    }, buttonText = "Open System Update", onClick = { openSettings(LocalContext.current, "android.settings.SYSTEM_UPDATE_SETTINGS") })
+    }, buttonText = "Open System Update", onClick = { openSettings(context, "android.settings.SYSTEM_UPDATE_SETTINGS") })
 }
 
 @Composable
@@ -140,6 +140,7 @@ fun HistoryCenter(history: List<ScanEntity>, onClear: () -> Unit) {
 @Composable
 fun StorageDoctor(report: ScanReport, previous: ScanEntity?) {
     val scan = report.scan
+    val context = LocalContext.current
     InfoCard("Storage Doctor Lite", buildString {
         appendLine("Used storage: ${oneDecimal(scan.storageUsedPct)}%")
         appendLine("Used amount: ${bytes(scan.storageUsedBytes)}")
@@ -150,7 +151,7 @@ fun StorageDoctor(report: ScanReport, previous: ScanEntity?) {
         appendLine("- Review apps that store large caches.")
         appendLine("- Move or delete large videos if storage climbs fast.")
         appendLine("- Keep at least 10-15 GB free when possible.")
-    }, buttonText = "Open Storage Settings", onClick = { openSettings(LocalContext.current, "android.settings.INTERNAL_STORAGE_SETTINGS") })
+    }, buttonText = "Open Storage Settings", onClick = { openSettings(context, "android.settings.INTERNAL_STORAGE_SETTINGS") })
 }
 
 @Composable
