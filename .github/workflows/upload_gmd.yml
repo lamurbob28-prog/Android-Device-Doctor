@@ -1,0 +1,192 @@
+name: Upload GMD to Geometry Dash
+
+on:
+  workflow_dispatch:
+    inputs:
+      gmd_path:
+        description: "Path to .gmd file in repo, like levels/level.gmd"
+        required: true
+        default: "levels/level.gmd"
+      gd_username:
+        description: "BURNER Geometry Dash username"
+        required: true
+      gd_password:
+        description: "BURNER GD password. Do not use your main account."
+        required: true
+      gd_account_id:
+        description: "Optional burner accountID. Leave blank to try lookup."
+        required: false
+        default: ""
+      level_name_override:
+        description: "Optional level name override"
+        required: false
+        default: ""
+      visibility:
+        description: "Visibility"
+        required: true
+        type: choice
+        options: [public, unlisted]
+        default: public
+      version_mode:
+        description: "Upload mode"
+        required: true
+        type: choice
+        options: [modern-first, legacy-first]
+        default: modern-first
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload GMD
+        env:
+          GMD_PATH: ${{ inputs.gmd_path }}
+          GD_USERNAME: ${{ inputs.gd_username }}
+          GD_PASSWORD: ${{ inputs.gd_password }}
+          GD_ACCOUNT_ID: ${{ inputs.gd_account_id }}
+          LEVEL_NAME_OVERRIDE: ${{ inputs.level_name_override }}
+          VISIBILITY: ${{ inputs.visibility }}
+          VERSION_MODE: ${{ inputs.version_mode }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, os, re, sys, urllib.parse, urllib.request, urllib.error
+          import xml.etree.ElementTree as ET
+
+          SECRET = "Wmfd2893gb7"
+          BASES = ["https://www.boomlings.com/database/", "http://www.boomlings.com/database/", "https://boomlings.com/database/", "http://boomlings.com/database/"]
+          HEADERS = [
+              {"User-Agent":"GeometryDash/2.2", "Accept":"*/*"},
+              {"User-Agent":"", "Accept":"*/*"},
+              {"Accept":"*/*"},
+          ]
+
+          def die(msg):
+              print("ERROR:", msg)
+              s=os.environ.get("GITHUB_STEP_SUMMARY")
+              if s:
+                  open(s,"a",encoding="utf-8").write("## Upload failed\n\n"+msg+"\n")
+              sys.exit(1)
+
+          def b64u(b): return base64.urlsafe_b64encode(b).decode().rstrip("=")
+          def xor(s,k): return "".join(chr(ord(c)^ord(k[i%len(k)])) for i,c in enumerate(s))
+          def gjp(p): return b64u(xor(p,"37526").encode())
+          def gjp2(p): return hashlib.sha1((p+"mI29fmAnxgTs").encode()).hexdigest()
+          def seed(ls):
+              if len(ls)<50: return ls
+              step=len(ls)//50
+              return ls[::step][:50]
+          def chk(vals,key,salt):
+              raw="".join(map(str, vals))+salt
+              h=hashlib.sha1(raw.encode()).hexdigest()
+              return b64u(xor(h,key).encode())
+          def b64desc(t): return b64u(t.encode())
+          def kids(e): return [x for x in list(e) if isinstance(x.tag,str)]
+          def val(n):
+              if n is None: return ""
+              if n.tag in ("s","string"): return n.text or ""
+              if n.tag in ("i","integer"):
+                  try: return int(n.text or "0")
+                  except: return 0
+              if n.tag in ("r","real"):
+                  try: return float(n.text or "0")
+                  except: return 0
+              if n.tag in ("t","true"): return True
+              if n.tag in ("f","false"): return False
+              if n.tag in ("d","dict"): return parse_dict(n)
+              return n.text or ""
+          def parse_dict(e):
+              ks=kids(e); out={}; i=0
+              while i<len(ks):
+                  if ks[i].tag in ("k","key"):
+                      out[ks[i].text or ""]=val(ks[i+1] if i+1<len(ks) else None); i+=2
+                  else: i+=1
+              return out
+          def parse_gmd(path):
+              if not os.path.exists(path): die("Could not find "+path+". Upload the .gmd to that exact path.")
+              root=ET.fromstring(open(path,"r",encoding="utf-8",errors="replace").read())
+              d=root.find("dict") or root.find("d")
+              if d is None: die("No plist/dict in .gmd")
+              data=parse_dict(d)
+              if "k2" not in data or "k4" not in data: die("Missing k2/k4. Not a normal .gmd")
+              return data
+          def coin_count(d): return sum(1 for k in ("k61","k62","k63") if d.get(k))
+          def blocked(t):
+              x=str(t or "")[:1000].lower()
+              return "<!doctype html" in x or "cloudflare" in x or "access denied" in x or "attention required" in x
+          def preview(t): return str(t or "")[:260].replace("\n","\\n")
+          def colon_map(t):
+              p=str(t or "").split("#")[0].split(":"); return {p[i]:p[i+1] for i in range(0,len(p)-1,2)}
+          def post(ep,payload,compact=False):
+              form=urllib.parse.urlencode(payload).encode(); attempts=[]
+              for base in BASES:
+                  for h in HEADERS:
+                      req=urllib.request.Request(base+ep, data=form, headers={"Content-Type":"application/x-www-form-urlencoded", **h}, method="POST")
+                      try:
+                          with urllib.request.urlopen(req, timeout=30) as r:
+                              text=r.read().decode("utf-8",errors="replace").strip(); status=r.status
+                      except urllib.error.HTTPError as e:
+                          text=e.read().decode("utf-8",errors="replace").strip(); status=e.code
+                      except Exception as e:
+                          text=repr(e); status=0
+                      print(f"Attempt {ep} status={status} ua={h.get('User-Agent','(none)')} preview={preview(text)}")
+                      attempts.append(text)
+                      if compact and status and not blocked(text) and (re.fullmatch(r"[0-9-]+",text) or ":" in text): return attempts
+              return attempts
+          def lookup(username):
+              for gv,bv in [("22","48"),("21","35")]:
+                  payload={"gameVersion":gv,"binaryVersion":bv,"gdw":"0","str":username,"page":"0","total":"0","secret":SECRET}
+                  for text in post("getGJUsers20.php",payload,True):
+                      m=colon_map(text)
+                      if m.get("16"): return m["16"]
+              return ""
+          def iv(d,k,default=0):
+              try: return int(d.get(k) or default)
+              except: return default
+
+          path=os.environ["GMD_PATH"].strip()
+          username=os.environ["GD_USERNAME"].strip()
+          password=os.environ["GD_PASSWORD"]
+          account=os.environ.get("GD_ACCOUNT_ID","").strip()
+          if not username or not password: die("Missing burner username/password input")
+          data=parse_gmd(path)
+          print("Detected level name:", data.get("k2"))
+          print("Creator field:", data.get("k5","(none)"))
+          print("Compressed levelString length:", len(str(data.get("k4") or "")))
+          print("Objects field k48:", data.get("k48",0))
+          if not account:
+              print("Trying accountID lookup...")
+              account=lookup(username)
+              if not account: die("Could not auto-find accountID. Re-run and paste gd_account_id manually.")
+          print("Using accountID:", account)
+          ls=str(data.get("k4") or "")
+          if len(ls)<20: die("Bad levelString")
+          song=iv(data,"k45",0); audio=0 if song>0 else iv(data,"k8",0)
+          name=(os.environ.get("LEVEL_NAME_OVERRIDE","").strip() or str(data.get("k2") or "Imported GMD"))[:40]
+          common={
+              "accountID":account,"gjp2":gjp2(password),"gjp":gjp(password),"userName":username,"levelID":"0",
+              "levelName":name,"levelDesc":str(data.get("k3") or ""),"levelVersion":str(iv(data,"k16",1)),
+              "levelLength":str(iv(data,"k23",0)),"audioTrack":str(audio),"auto":"0","password":"1","original":"0",
+              "twoPlayer":str(iv(data,"k43",0)),"songID":str(song),"objects":str(iv(data,"k48",0)),"coins":str(coin_count(data)),
+              "requestedStars":str(iv(data,"k66",0)),"unlisted":"0" if os.environ.get("VISIBILITY","public")=="public" else "1",
+              "ldm":str(iv(data,"k72",0)),"levelString":ls,"seed2":chk([seed(ls)],"41274","xI25fpAapCQg"),"secret":SECRET}
+          modern={**common,"gameVersion":"22","binaryVersion":"48","gdw":"0","dvs":"2"}
+          legacy={**common,"gameVersion":"21","binaryVersion":"35","gdw":"0"}
+          payloads=[("modern",modern),("legacy",legacy)] if os.environ.get("VERSION_MODE")!="legacy-first" else [("legacy",legacy),("modern",modern)]
+          for label,payload in payloads:
+              print("Uploading variant:",label)
+              for text in post("uploadGJLevel21.php",payload,True):
+                  t=str(text).strip()
+                  if re.fullmatch(r"[0-9]+",t) and int(t)>0:
+                      print("SUCCESS. Level ID:",t)
+                      s=os.environ.get("GITHUB_STEP_SUMMARY")
+                      if s: open(s,"a",encoding="utf-8").write(f"## SUCCESS\n\n**Geometry Dash Level ID:** `{t}`\n\nOpen Geometry Dash → Search → enter that ID.\n")
+                      print(f"::notice title=Geometry Dash Level ID::{t}")
+                      sys.exit(0)
+          die("Upload failed. If previews show Cloudflare/HTML, Boomlings blocked GitHub. If response is -1, GD rejected the upload.")
+          PY
