@@ -9,11 +9,12 @@ The active launcher retains `.v4.V4MainActivity` and the v4 database path for co
 - `DiagnosticsEngine.kt`: individually guarded Android reads, report assembly, and comparisons.
 - `DoctorViewModel.kt`: lifecycle-owned work, off-main-thread snapshots, scan deduplication, serialized database operations, report export, and cancellation.
 - `ScanDao.kt`: atomic save plus retention of 50 entries; timestamp ties resolve by ID.
-- `NetworkDoctor.kt`: two captured-network HTTPS checks, strict expected-response handling, bounded worker count and wait, cancellation, and resource cleanup.
+- `NetworkDoctor.kt`: two HTTPS checks on the captured network.
+- `HttpsProbe.kt`: strict responses, bounded worker count and queue, timeout/cancellation, and resource cleanup; tested with fake connections.
 - `NetworkAssessment.kt`: pure response/summary decisions.
 - `V4MainActivity.kt`, `ToolsScreen.kt`, `HardwareTests.kt`: Compose UI, settings handoffs, and user-driven tests. Sensor listeners and audio stop on lifecycle pause/disposal.
 
-The missing `android.useAndroidX=true` build setting is supplied. Legacy Java versions are archived outside the active source set, so only the current implementation is packaged. Tool versions remain aligned instead of mixing an unrelated compiler/framework upgrade into the remake.
+The missing `android.useAndroidX=true` build setting is supplied. Legacy Java versions are archived outside the active source set, so only the current implementation is packaged. The standard Gradle wrapper pins version 8.9 and its published SHA-256 distribution checksum. Tool versions remain aligned instead of mixing an unrelated compiler/framework upgrade into the remake.
 
 ## Verification scope
 
@@ -28,3 +29,5 @@ API references used:
 - https://developer.android.com/reference/android/os/BatteryManager
 - https://developer.android.com/reference/android/net/NetworkCapabilities
 - https://developer.android.com/reference/android/net/Network
+
+Gradle wrapper scripts and JAR are from the official Gradle v8.9.0 source tree and retain their Apache 2.0 notices. Distribution checksum reference: https://gradle.org/release-checksums/

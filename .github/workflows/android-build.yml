@@ -34,7 +34,7 @@ jobs:
       - name: Install Android SDK packages
         run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;34.0.0"'
       - name: Test, lint, and assemble
-        run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --stacktrace
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --stacktrace
       - name: Package installable APK
         run: |
           mkdir -p dist
@@ -90,8 +90,8 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot
           script: |
-            gradle :app:connectedDebugAndroidTest --no-daemon --stacktrace
-            adb pull /sdcard/Android/data/com.lamurbob28.devicedoctor/files/screenshots app/build/device-screenshots
+            ./gradlew :app:connectedDebugAndroidTest --no-daemon --stacktrace
+            adb pull /sdcard/Download/device-doctor-previews app/build/device-screenshots
       - name: Upload device test reports
         if: always()
         uses: actions/upload-artifact@v4

@@ -1,7 +1,8 @@
 package com.lamurbob28.devicedoctor.v4
 
-import android.graphics.Bitmap
+import android.os.ParcelFileDescriptor
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
@@ -14,7 +15,6 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class DoctorAppTest {
@@ -39,7 +39,8 @@ class DoctorAppTest {
         compose.onNodeWithTag("tool-Touchscreen").performClick()
         compose.onNodeWithTag("touch-grid").performTouchInput { swipe(Offset(10f, 10f), Offset(width - 10f, height - 10f), 600) }
         compose.onNodeWithTag("touch-count").assertTextContains("/60 cells", substring = true)
-        compose.onNodeWithTag("touch-count").assert(hasText("0/60 cells", substring = true).not())
+        val coverage = compose.onNodeWithTag("touch-count").fetchSemanticsNode().config[SemanticsProperties.Text].first().text
+        assertTrue(coverage.substringBefore("/").toInt() > 0)
         screenshot("touchscreen")
         compose.onNodeWithTag("close-hardware").performClick()
         compose.onNodeWithTag("tools-list").performScrollToNode(hasTestTag("tool-Display"))
@@ -82,13 +83,18 @@ class DoctorAppTest {
 
     private fun screenshot(name: String) {
         compose.waitForIdle()
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val bitmap = instrumentation.uiAutomation.takeScreenshot() ?: return
-        val width = minOf(720, bitmap.width)
-        val scaled = Bitmap.createScaledBitmap(bitmap, width, bitmap.height * width / bitmap.width, true)
-        val directory = File(compose.activity.getExternalFilesDir(null), "screenshots").apply { mkdirs() }
-        File(directory, "$name.png").outputStream().use { scaled.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        if (scaled !== bitmap) scaled.recycle()
-        bitmap.recycle()
+        // AGP removes app-private storage when it uninstalls test APKs. Keep screenshots in
+        // the disposable emulator's Downloads directory using instrumentation's shell access.
+        // This adds no storage/screen-capture permission to the app being shipped.
+        require(name.matches(Regex("[a-z]+")))
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        fun shell(command: String): String = ParcelFileDescriptor.AutoCloseInputStream(
+            automation.executeShellCommand(command)
+        ).use { it.bufferedReader().readText() }
+        val directory = "/sdcard/Download/device-doctor-previews"
+        shell("mkdir -p $directory")
+        shell("screencap -p $directory/$name.png")
+        val size = shell("wc -c $directory/$name.png").trim().substringBefore(" ").toLongOrNull() ?: 0
+        assertTrue("Screenshot $name was not captured", size > 1000)
     }
 }

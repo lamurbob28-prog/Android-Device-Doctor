@@ -42,12 +42,12 @@ Permissions are limited to `ACCESS_NETWORK_STATE`, `INTERNET`, and `VIBRATE`. No
 
 ## Build and verify
 
-Use JDK 17, Gradle **8.9**, Android SDK platform **35**, and build tools **34.0.0**. These match Android Gradle Plugin 8.7.3. Gradle is provisioned at its pinned version in Actions; locally install Gradle 8.9 or import the project in Android Studio with that version.
+Use JDK 17, Gradle **8.9**, Android SDK platform **35**, and build tools **34.0.0**. These match Android Gradle Plugin 8.7.3. The included Gradle wrapper pins and verifies the distribution checksum. Import the project in Android Studio or use the commands below.
 
 ```sh
-gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
 # With an Android emulator or test device connected:
-gradle :app:connectedDebugAndroidTest
+./gradlew :app:connectedDebugAndroidTest
 ```
 
 CI builds the app, runs unit tests and lint, then exercises it on API 23 and API 35 emulators. It uploads test reports and screenshots. Tests cover unavailable and invalid readings, cold temperatures, exact thresholds, misleading network responses, history retention, v4 schema compatibility, navigation, touch/display tools, activity recreation, duplicate scans, and history clearing.

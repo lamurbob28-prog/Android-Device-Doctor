@@ -98,7 +98,12 @@ class DiagnosticsEngine(private val context: Context) {
             val status = DiagnosticRules.status(findings)
             val score = if (status == "UNKNOWN") -1 else DiagnosticRules.score(findings)
             val attention = findings.count { it.needsAttention }
-            val unavailable = findings.count { it.title.contains("unavailable", ignoreCase = true) }
+            val unavailable = listOf(
+                DiagnosticRules.patchAgeDays(snapshot.securityPatch, snapshot.timestamp) == null,
+                snapshot.battery.temperatureC == null, snapshot.battery.health == null,
+                snapshot.storage == null, snapshot.memory == null, snapshot.connection == null,
+                snapshot.thermalStatus == null, snapshot.sensorCount == null, snapshot.secureLock == null
+            ).count { it }
             val summary = when {
                 status == "UNKNOWN" -> "Not enough readings to draw a conclusion. Review the unavailable checks."
                 attention == 0 -> "No alerts in the checks Android exposed. This snapshot cannot rule out every device problem."
@@ -141,7 +146,7 @@ class DiagnosticsEngine(private val context: Context) {
                 appendLine("Sensor inventory: ${snapshot.sensorCount ?: "Unavailable"}")
                 appendLine("\nFINDINGS")
                 findings.forEach { appendLine("[${it.severity}] ${it.title}\n${it.detail}\n${it.advice}\n") }
-                appendLine("Reports stay in this app until you choose to copy, save, or share them. No identifiers, SSIDs, or IP addresses are collected.")
+                appendLine("Reports stay in this app until you choose to copy, save, or share them. No unique device identifiers, SSIDs, or IP addresses are collected.")
             }.trim()
             val scan = ScanEntity(
                 timestamp = snapshot.timestamp, score = score, status = status,

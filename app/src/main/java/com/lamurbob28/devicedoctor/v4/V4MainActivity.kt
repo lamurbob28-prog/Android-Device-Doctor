@@ -23,6 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -108,7 +109,7 @@ fun DeviceDoctorApp(vm: DoctorViewModel = viewModel()) {
             bottomBar = {
                 NavigationBar(containerColor = Background, tonalElevation = 0.dp) {
                     val titles = listOf("Overview", "Checks", "Tools", "History")
-                    val icons = listOf(Icons.Default.Home, Icons.Default.List, Icons.Default.Build, Icons.Default.DateRange)
+                    val icons = listOf(Icons.Default.Home, Icons.AutoMirrored.Filled.List, Icons.Default.Build, Icons.Default.DateRange)
                     titles.forEachIndexed { index, title ->
                         NavigationBarItem(selected = tab == index, onClick = { tab = index },
                             icon = { Icon(icons[index], null) }, label = { Text(title, maxLines = 1) },

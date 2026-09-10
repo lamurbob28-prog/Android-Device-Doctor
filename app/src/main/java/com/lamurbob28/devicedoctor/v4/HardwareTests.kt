@@ -123,7 +123,10 @@ private fun SoundTest() {
     var tone by remember { mutableStateOf<ToneGenerator?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     val vibrator = remember { context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator }
-    fun stopTone() { tone?.let { runCatching { it.stopTone(); it.release() } }; tone = null }
+    fun stopTone() {
+        tone?.let { runCatching { it.stopTone() }; runCatching { it.release() } }
+        tone = null
+    }
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_PAUSE) { stopTone(); vibrator?.cancel() } }
         lifecycle.addObserver(observer)
