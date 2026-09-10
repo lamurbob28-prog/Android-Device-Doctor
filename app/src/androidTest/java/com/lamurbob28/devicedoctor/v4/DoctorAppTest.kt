@@ -94,7 +94,7 @@ class DoctorAppTest {
         val directory = "/sdcard/Download/device-doctor-previews"
         shell("mkdir -p $directory")
         shell("screencap -p $directory/$name.png")
-        val size = shell("wc -c $directory/$name.png").trim().substringBefore(" ").toLongOrNull() ?: 0
+        val size = shell("wc -c $directory/$name.png").trim().takeWhile { it.isDigit() }.toLongOrNull() ?: 0
         assertTrue("Screenshot $name was not captured", size > 1000)
     }
 }
