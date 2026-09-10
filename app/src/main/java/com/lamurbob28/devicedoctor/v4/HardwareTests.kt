@@ -1,6 +1,11 @@
 package com.lamurbob28.devicedoctor.v4
 
 import android.content.Context
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -32,29 +37,42 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+class HardwareTestActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
+        val kind = intent.getStringExtra("test") ?: "Touchscreen"
+        setContent { DoctorTheme { HardwareScreen(kind, onClose = { finish() }) } }
+    }
+}
+
 @Composable
-fun HardwareDialog(kind: String, onDismiss: () -> Unit) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Surface(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(kind, Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
-                    IconButton(onClick = onDismiss, modifier = Modifier.testTag("close-hardware")) { Icon(Icons.Default.Close, "Close hardware test") }
-                }
-                when (kind) {
-                    "Touchscreen" -> TouchscreenTest()
-                    "Display" -> DisplayTest()
-                    "Sound & vibration" -> SoundTest()
-                    else -> LiveSensorTest()
-                }
+private fun HardwareScreen(kind: String, onClose: () -> Unit) {
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets.safeDrawing,
+        topBar = {
+            Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(kind, Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
+                IconButton(onClick = onClose, modifier = Modifier.testTag("close-hardware")) { Icon(Icons.Default.Close, "Close hardware test") }
+            }
+        }
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).padding(20.dp)) {
+            when (kind) {
+                "Touchscreen" -> TouchscreenTest()
+                "Display" -> DisplayTest()
+                "Sound & vibration" -> SoundTest()
+                else -> LiveSensorTest()
             }
         }
     }

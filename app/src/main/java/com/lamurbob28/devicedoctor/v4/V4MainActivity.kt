@@ -64,6 +64,11 @@ private val DoctorColors = darkColorScheme(
     onSurfaceVariant = Muted, outline = Color(0xFF6C858F), error = Red
 )
 
+@Composable
+internal fun DoctorTheme(content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = DoctorColors, content = content)
+}
+
 class V4MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

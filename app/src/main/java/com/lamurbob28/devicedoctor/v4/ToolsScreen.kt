@@ -1,5 +1,7 @@
 package com.lamurbob28.devicedoctor.v4
 
+import android.content.Intent
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
@@ -14,7 +16,6 @@ import com.lamurbob28.devicedoctor.BuildConfig
 @Composable
 fun ToolsScreen(vm: DoctorViewModel, onSave: () -> Unit) {
     val context = LocalContext.current
-    var hardware by rememberSaveable { mutableStateOf<String?>(null) }
     val network = vm.networkResult
     LazyColumn(Modifier.fillMaxSize().testTag("tools-list"), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item { SectionTitle("Put it to the test", "Hands-on checks and shortcuts to the settings that matter.") }
@@ -39,7 +40,7 @@ fun ToolsScreen(vm: DoctorViewModel, onSave: () -> Unit) {
             PanelCard {
                 SectionTitle("Hardware checkup", "These are manual checks. Observe what happens; the app won't invent a pass or fail.")
                 listOf("Touchscreen" to "Trace a grid and check multiple fingers", "Display" to "Inspect solid colors for stuck pixels", "Sound & vibration" to "Play a short tone or vibration", "Live sensors" to "See motion, light, and proximity readings").forEach { (name, detail) ->
-                    OutlinedButton(onClick = { hardware = name }, modifier = Modifier.fillMaxWidth().testTag("tool-$name"), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
+                    OutlinedButton(onClick = { context.startActivity(Intent(context, HardwareTestActivity::class.java).putExtra("test", name)) }, modifier = Modifier.fillMaxWidth().testTag("tool-$name"), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
                         Column(Modifier.fillMaxWidth()) {
                             Text(name, style = MaterialTheme.typography.titleSmall)
                             Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -81,5 +82,4 @@ fun ToolsScreen(vm: DoctorViewModel, onSave: () -> Unit) {
             }
         }
     }
-    hardware?.let { HardwareDialog(it, onDismiss = { hardware = null }) }
 }
