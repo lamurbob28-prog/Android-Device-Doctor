@@ -2,121 +2,95 @@ package com.lamurbob28.devicedoctor.v4
 
 import android.content.Context
 import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import android.net.Network
+import android.os.SystemClock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.HttpURLConnection
-import java.net.InetAddress
-import java.net.InetSocketAddress
-import java.net.Socket
+import java.net.SocketTimeoutException
 import java.net.URL
+import java.net.UnknownHostException
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.SSLException
+import kotlin.coroutines.resume
 
-class NetworkDoctor(private val context: Context) {
-    suspend fun run(): String = withContext(Dispatchers.IO) {
-        val androidNetwork = readAndroidNetwork()
-        val dnsGoogle = timedDns("google.com")
-        val dnsCloudflare = timedDns("cloudflare.com")
-        val tcpCloudflare = timedTcp("1.1.1.1", 443, 3000)
-        val tcpGoogle = timedTcp("8.8.8.8", 443, 3000)
-        val http = timedHttp("https://www.google.com/generate_204", 5000)
-
-        var problems = 0
-        if (!androidNetwork.hasNetwork || !androidNetwork.hasInternet) problems++
-        if (!dnsGoogle.success && !dnsCloudflare.success) problems++
-        if (!tcpCloudflare.success && !tcpGoogle.success) problems++
-        if (!http.success) problems++
-        if (tcpCloudflare.success && tcpCloudflare.ms > 800) problems++
-
-        buildString {
-            appendLine("Network Doctor v4.0")
-            appendLine("Android network type: ${androidNetwork.type}")
-            appendLine("Android validated: ${yesNo(androidNetwork.validated)}")
-            appendLine("Android internet capability: ${yesNo(androidNetwork.hasInternet)}")
-            appendLine()
-            appendLine("TESTS")
-            appendLine(format("DNS google.com", dnsGoogle))
-            appendLine(format("DNS cloudflare.com", dnsCloudflare))
-            appendLine(format("TCP 1.1.1.1:443", tcpCloudflare))
-            appendLine(format("TCP 8.8.8.8:443", tcpGoogle))
-            append("HTTPS generate_204: ${if (http.success) "OK" else "FAILED"} in ${http.ms} ms (HTTP ${http.code})")
-            if (http.error != null) append(" - ${http.error}")
-            appendLine()
-            appendLine()
-            appendLine("RESULT")
-            when {
-                problems == 0 -> appendLine("Status: GOOD\nInternet looks reachable. Latency and DNS are healthy.")
-                problems <= 2 -> appendLine("Status: WARNING\nSome checks failed or looked slow. Try toggling Wi-Fi, switching networks, or restarting the router.")
-                else -> appendLine("Status: BAD\nMultiple network checks failed. This connection may be broken, captive, or blocked.")
-            }
-        }
+/** Two small, explicit HTTPS requests. No background polling or bulk speed-test downloads. */
+class NetworkDoctor(private val context: Context) : AutoCloseable {
+    // A resolver on older Android can ignore interrupts. Bound both worker count and UI wait time.
+    private val executor = Executors.newFixedThreadPool(2) { runnable ->
+        Thread(runnable, "doctor-network").apply { isDaemon = true }
     }
 
-    private fun readAndroidNetwork(): AndroidNetwork {
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return AndroidNetwork()
-        val network = cm.activeNetwork ?: return AndroidNetwork()
-        val caps = cm.getNetworkCapabilities(network) ?: return AndroidNetwork(hasNetwork = true)
-        val type = when {
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Cellular"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
-            else -> "Other"
-        }
-        return AndroidNetwork(
-            hasNetwork = true,
-            hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
-            validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
-            type = type
+    suspend fun run(): NetworkDoctorResult = coroutineScope {
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val network = manager?.activeNetwork
+        val reading = readConnection(context)
+        if (network == null) return@coroutineScope NetworkDoctorResult(
+            summary = "No active connection to test. Connect to Wi-Fi or mobile data, then try again.",
+            timestamp = System.currentTimeMillis()
+        )
+        val checks = listOf(
+            "Google" to "https://www.google.com/generate_204",
+            "Cloudflare" to "https://cp.cloudflare.com/generate_204"
+        ).map { (name, url) -> async { probe(network, name, url) } }.awaitAll()
+        val changed = manager.activeNetwork != network
+        NetworkDoctorResult(
+            summary = NetworkAssessment.summary(checks, changed, reading?.captivePortal == true),
+            checks = checks,
+            timestamp = System.currentTimeMillis()
         )
     }
 
-    private fun timedDns(host: String): TimedResult {
-        val start = System.currentTimeMillis()
-        return try {
-            val addresses = InetAddress.getAllByName(host)
-            TimedResult(true, System.currentTimeMillis() - start, addresses.firstOrNull()?.hostAddress ?: "No addresses")
-        } catch (e: Exception) {
-            TimedResult(false, System.currentTimeMillis() - start, simpleError(e))
-        }
+    private suspend fun probe(network: Network, name: String, url: String): NetworkCheck {
+        val start = SystemClock.elapsedRealtime()
+        return withTimeoutOrNull(8_000) {
+            suspendCancellableCoroutine { continuation ->
+                val connection = AtomicReference<HttpURLConnection?>(null)
+                val future = executor.submit {
+                    if (!continuation.isActive) return@submit
+                    val result = try {
+                        // Keep each request on the network captured at the start, including its DNS/proxy.
+                        val http = network.openConnection(URL(url)) as HttpURLConnection
+                        connection.set(http)
+                        if (!continuation.isActive) {
+                            http.disconnect()
+                            return@submit
+                        }
+                        http.connectTimeout = 4_000
+                        http.readTimeout = 4_000
+                        http.instanceFollowRedirects = false
+                        http.useCaches = false
+                        http.setRequestProperty("User-Agent", "DeviceDoctor/5.0")
+                        val code = http.responseCode
+                        NetworkCheck(name, NetworkAssessment.isExpectedResponse(code),
+                            SystemClock.elapsedRealtime() - start, NetworkAssessment.httpDetail(code))
+                    } catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        val detail = when (error) {
+                            is UnknownHostException -> "DNS could not resolve this endpoint. Filtering or a DNS problem may be involved."
+                            is SSLException -> "A secure TLS connection could not be verified. Check the clock and network."
+                            is SocketTimeoutException -> "The endpoint timed out. That alone does not prove the whole connection is down."
+                            else -> "This endpoint could not be reached (${error.javaClass.simpleName})."
+                        }
+                        NetworkCheck(name, false, SystemClock.elapsedRealtime() - start, detail)
+                    } finally {
+                        connection.getAndSet(null)?.disconnect()
+                    }
+                    if (continuation.isActive) continuation.resume(result)
+                }
+                continuation.invokeOnCancellation {
+                    future.cancel(true)
+                    connection.getAndSet(null)?.disconnect()
+                }
+            }
+        } ?: NetworkCheck(name, false, SystemClock.elapsedRealtime() - start,
+            "Stopped after the 8-second limit. A blocked or slow endpoint is inconclusive.")
     }
 
-    private fun timedTcp(host: String, port: Int, timeoutMs: Int): TimedResult {
-        val start = System.currentTimeMillis()
-        val socket = Socket()
-        return try {
-            socket.connect(InetSocketAddress(host, port), timeoutMs)
-            TimedResult(true, System.currentTimeMillis() - start, "Connected")
-        } catch (e: Exception) {
-            TimedResult(false, System.currentTimeMillis() - start, simpleError(e))
-        } finally {
-            try { socket.close() } catch (_: Exception) { }
-        }
-    }
-
-    private fun timedHttp(urlText: String, timeoutMs: Int): HttpResult {
-        val start = System.currentTimeMillis()
-        var connection: HttpURLConnection? = null
-        return try {
-            connection = URL(urlText).openConnection() as HttpURLConnection
-            connection.connectTimeout = timeoutMs
-            connection.readTimeout = timeoutMs
-            connection.useCaches = false
-            connection.instanceFollowRedirects = false
-            connection.connect()
-            val code = connection.responseCode
-            HttpResult(code in 200..399, System.currentTimeMillis() - start, code, null)
-        } catch (e: Exception) {
-            HttpResult(false, System.currentTimeMillis() - start, -1, simpleError(e))
-        } finally {
-            connection?.disconnect()
-        }
-    }
-
-    private fun format(label: String, result: TimedResult): String = "$label: ${if (result.success) "OK" else "FAILED"} in ${result.ms} ms - ${result.message}"
-    private fun yesNo(value: Boolean): String = if (value) "Yes" else "No"
-    private fun simpleError(e: Exception): String = e::class.java.simpleName + (e.message?.let { ": $it" } ?: "")
-
-    private data class AndroidNetwork(val hasNetwork: Boolean = false, val hasInternet: Boolean = false, val validated: Boolean = false, val type: String = "None")
-    private data class TimedResult(val success: Boolean, val ms: Long, val message: String)
-    private data class HttpResult(val success: Boolean, val ms: Long, val code: Int, val error: String?)
+    override fun close() { executor.shutdownNow() }
 }

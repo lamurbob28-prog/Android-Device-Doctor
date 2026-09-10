@@ -1,6 +1,7 @@
 package com.lamurbob28.devicedoctor.v4
 
 import android.app.ActivityManager
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -10,299 +11,199 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Build
-import android.os.Environment
 import android.os.PowerManager
 import android.os.StatFs
 import android.os.SystemClock
 import android.provider.Settings
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import kotlin.math.abs
+import com.lamurbob28.devicedoctor.BuildConfig
 
 class DiagnosticsEngine(private val context: Context) {
-    fun scan(previous: ScanEntity?): ScanReport {
-        val findings = mutableListOf<Finding>()
-        var score = 100
+    fun scan(previous: ScanEntity?): ScanReport = report(collect(), previous)
 
-        fun add(severity: Severity, title: String, detail: String, advice: String, penalty: Int = 0) {
-            findings += Finding(severity, title, detail, advice)
-            score -= penalty
-        }
+    private fun collect(): DeviceSnapshot = DeviceSnapshot(
+        timestamp = System.currentTimeMillis(),
+        manufacturer = Build.MANUFACTURER,
+        model = Build.MODEL,
+        androidVersion = Build.VERSION.RELEASE,
+        sdk = Build.VERSION.SDK_INT,
+        securityPatch = Build.VERSION.SECURITY_PATCH.orEmpty(),
+        battery = runCatching { readBattery() }.getOrDefault(BatteryReading()),
+        storage = runCatching {
+            val stat = StatFs(context.filesDir.path)
+            StorageReading(stat.totalBytes, stat.availableBytes).takeIf { it.total > 0 && it.available in 0..it.total }
+        }.getOrNull(),
+        memory = runCatching {
+            val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val info = ActivityManager.MemoryInfo().also { manager.getMemoryInfo(it) }
+            MemoryReading(info.totalMem, info.availMem, info.lowMemory).takeIf { it.total > 0 && it.available in 0..it.total }
+        }.getOrNull(),
+        connection = readConnection(context),
+        thermalStatus = if (Build.VERSION.SDK_INT >= 29) runCatching {
+            (context.getSystemService(Context.POWER_SERVICE) as PowerManager).currentThermalStatus.takeIf { it in 0..6 }
+        }.getOrNull() else null,
+        sensorCount = runCatching {
+            (context.getSystemService(Context.SENSOR_SERVICE) as SensorManager).getSensorList(Sensor.TYPE_ALL).size
+        }.getOrNull(),
+        secureLock = runCatching {
+            (context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isDeviceSecure
+        }.getOrNull(),
+        automaticTime = runCatching { Settings.Global.getInt(context.contentResolver, Settings.Global.AUTO_TIME) == 1 }.getOrNull(),
+        powerSaver = runCatching {
+            (context.getSystemService(Context.POWER_SERVICE) as PowerManager).isPowerSaveMode
+        }.getOrNull(),
+        uptimeMillis = SystemClock.elapsedRealtime()
+    )
 
-        val patch = Build.VERSION.SECURITY_PATCH ?: "Unknown"
-        val patchAge = patchAgeDays(patch)
-        when {
-            patchAge < 0 -> add(Severity.INFO, "Security Patch", "Security patch date is unavailable.", "Check Android updates manually if this looks wrong.")
-            patchAge <= 90 -> add(Severity.GOOD, "Security Patch", "Security patch is recent: $patch.", "Patch age is about $patchAge days.")
-            patchAge <= 180 -> add(Severity.WARNING, "Security Patch", "Security patch is aging: $patch.", "Patch age is about $patchAge days. Check for updates.", 5)
-            patchAge <= 365 -> add(Severity.WARNING, "Security Patch", "Security patch is stale: $patch.", "Patch age is about $patchAge days. System update check recommended.", 10)
-            else -> add(Severity.BAD, "Security Patch", "Security patch is very old: $patch.", "Patch age is about $patchAge days. Update if possible.", 20)
-        }
-
-        val thermalName = thermalStatusName(readThermalStatus())
-        when (thermalName) {
-            "None" -> add(Severity.GOOD, "Thermals", "System thermal status is normal.", "No thermal throttling reported.")
-            "Unavailable" -> add(Severity.INFO, "Thermals", "Thermal status is unavailable.", "This Android version may not expose it.")
-            "Light" -> add(Severity.WARNING, "Thermals", "System thermal status is light.", "The phone is slightly warm.", 5)
-            "Moderate" -> add(Severity.WARNING, "Thermals", "System thermal status is moderate.", "Let the phone cool if performance feels worse.", 10)
-            else -> add(Severity.BAD, "Thermals", "System thermal status is $thermalName.", "Stop heavy use and let the phone cool down.", 25)
-        }
-
-        val battery = readBattery()
-        when {
-            battery.tempC < 0 -> add(Severity.INFO, "Battery Temperature", "Temperature is unavailable.", "Android did not expose battery temperature on this scan.")
-            battery.tempC >= 45 -> add(Severity.BAD, "Battery Temperature", "Battery is very hot: ${oneDecimal(battery.tempC)} C.", "Stop heavy use and let the phone cool down.", 20)
-            battery.tempC >= 40 -> add(Severity.BAD, "Battery Temperature", "Battery is hot: ${oneDecimal(battery.tempC)} C.", "Heat wears batteries down faster.", 15)
-            battery.tempC >= 35 -> add(Severity.WARNING, "Battery Temperature", "Battery is warm: ${oneDecimal(battery.tempC)} C.", "Avoid stacking heat with gaming plus charging.", 5)
-            else -> add(Severity.GOOD, "Battery Temperature", "Battery temperature looks normal: ${oneDecimal(battery.tempC)} C.", "No heat problem detected.")
-        }
-        if (battery.health == "Good") add(Severity.GOOD, "Battery Health", "Android reports battery health as good.", "Nothing concerning detected here.")
-        else if (battery.health == "Unknown") add(Severity.INFO, "Battery Health", "Battery health is unknown.", "Some devices do not expose useful battery health data.")
-        else add(Severity.BAD, "Battery Health", "Android reports battery health as ${battery.health}.", "Watch charging, heat, and sudden shutdowns.", 20)
-
-        val storage = readStorage()
-        when {
-            storage.usedPct >= 95 -> add(Severity.BAD, "Storage", "Storage is critically full: ${oneDecimal(storage.usedPct)}% used.", "Free space soon.", 30)
-            storage.usedPct >= 90 -> add(Severity.BAD, "Storage", "Storage is very full: ${oneDecimal(storage.usedPct)}% used.", "Clear downloads, videos, cache, or unused apps.", 20)
-            storage.usedPct >= 80 -> add(Severity.WARNING, "Storage", "Storage is getting high: ${oneDecimal(storage.usedPct)}% used.", "Cleanup is not urgent, but it is getting close.", 10)
-            else -> add(Severity.GOOD, "Storage", "Storage looks okay: ${oneDecimal(storage.usedPct)}% used.", "Free space is not currently a problem.")
-        }
-
-        val network = readNetwork()
-        when {
-            !network.hasNetwork -> add(Severity.BAD, "Network", "No active network detected.", "Connect to Wi-Fi or mobile data.", 20)
-            !network.hasInternet -> add(Severity.BAD, "Network", "A network exists, but Android does not see internet capability.", "Reconnect or switch networks.", 20)
-            !network.validated -> add(Severity.WARNING, "Network", "Connected, but Android has not validated real internet.", "Run Network Doctor or check for a login page.", 10)
-            else -> add(Severity.GOOD, "Network", "Internet connection is validated on ${network.type}.", "Network looks normal from Android's view.")
-        }
-        if (network.hasNetwork && !network.notMetered) add(Severity.INFO, "Metered Network", "This connection may be metered.", "Large downloads may use mobile data or a limited connection.")
-
-        val memory = readMemory()
-        if (memory.lowMemory) add(Severity.WARNING, "Memory", "Android reports low memory pressure.", "Close heavy apps or restart if sluggish.", 10)
-        else add(Severity.GOOD, "Memory", "Android is not reporting low memory pressure.", "No RAM emergency detected.")
-
-        val sensors = readSensorCount()
-        add(Severity.GOOD, "Sensors", "$sensors sensors detected.", "Sensor service is responding normally.")
-
-        val elapsed = SystemClock.elapsedRealtime()
-        val uptimeDays = elapsed / 86_400_000L
-        when {
-            uptimeDays >= 30 -> add(Severity.WARNING, "Uptime", "Phone has been running for $uptimeDays days since boot.", "Restarting can clear background-service problems.", 15)
-            uptimeDays >= 14 -> add(Severity.WARNING, "Uptime", "Phone has been running for $uptimeDays days since boot.", "A restart may help if anything feels strange.", 10)
-            uptimeDays >= 7 -> add(Severity.WARNING, "Uptime", "Phone has been running for $uptimeDays days since boot.", "A restart can freshen things up.", 5)
-            else -> add(Severity.GOOD, "Uptime", "Recent boot: ${duration(elapsed)} since startup.", "No restart recommendation right now.")
-        }
-
-        score = score.coerceIn(0, 100)
-        val status = if (score >= 85 && findings.none { it.severity == Severity.BAD }) "GOOD" else if (score >= 60) "WARNING" else "BAD"
-
-        val raw = buildRawReport(status, score, patch, patchAge, thermalName, battery, storage, network, memory, sensors, elapsed, findings)
-        val entity = ScanEntity(
-            timestamp = System.currentTimeMillis(),
-            score = score,
-            status = status,
-            androidVersion = Build.VERSION.RELEASE ?: "Unknown",
-            sdk = Build.VERSION.SDK_INT,
-            securityPatch = patch,
-            patchAgeDays = patchAge,
-            batteryPercent = battery.percent,
-            batteryTempC = battery.tempC,
-            batteryHealth = battery.health,
-            storageUsedBytes = storage.used,
-            storageTotalBytes = storage.total,
-            storageUsedPct = storage.usedPct,
-            networkType = network.type,
-            networkValidated = network.validated,
-            thermalStatus = thermalName,
-            uptimeDays = uptimeDays,
-            rawReport = raw
-        )
-
-        return ScanReport(
-            scan = entity,
-            findings = findings,
-            smartSummary = buildSmartSummary(entity, findings),
-            changeSummary = buildChangeSummary(previous, entity),
-            rawDetails = raw
-        )
-    }
-
-    private fun buildRawReport(status: String, score: Int, patch: String, patchAge: Long, thermal: String, battery: BatteryData, storage: StorageData, network: NetworkData, memory: MemoryData, sensors: Int, elapsed: Long, findings: List<Finding>): String {
-        val warnings = findings.count { it.severity == Severity.WARNING }
-        val bad = findings.count { it.severity == Severity.BAD }
-        val good = findings.count { it.severity == Severity.GOOD }
-        return buildString {
-            appendLine("Device Doctor v4.0 Report")
-            appendLine("Scan time: ${formatTime(System.currentTimeMillis())}")
-            appendLine()
-            appendLine("DEVICE")
-            appendLine("Manufacturer: ${Build.MANUFACTURER}")
-            appendLine("Model: ${Build.MODEL}")
-            appendLine("Android: ${Build.VERSION.RELEASE}")
-            appendLine("SDK: ${Build.VERSION.SDK_INT}")
-            appendLine("Security patch: $patch")
-            appendLine("Patch age: ${if (patchAge >= 0) "$patchAge days" else "Unknown"}")
-            appendLine()
-            appendLine("THERMAL")
-            appendLine("Thermal status: $thermal")
-            appendLine()
-            appendLine("BATTERY")
-            appendLine("Level: ${battery.percent}%")
-            appendLine("Health: ${battery.health}")
-            appendLine("Temperature: ${oneDecimal(battery.tempC)} C")
-            appendLine("Voltage: ${battery.voltageMv} mV")
-            appendLine("Technology: ${battery.technology}")
-            appendLine()
-            appendLine("STORAGE")
-            appendLine("Internal total: ${bytes(storage.total)}")
-            appendLine("Internal used: ${bytes(storage.used)} (${oneDecimal(storage.usedPct)}%)")
-            appendLine("Internal free: ${bytes(storage.free)}")
-            appendLine()
-            appendLine("NETWORK")
-            appendLine("Type: ${network.type}")
-            appendLine("Internet capability: ${yesNo(network.hasInternet)}")
-            appendLine("Validated internet: ${yesNo(network.validated)}")
-            appendLine("Not metered: ${yesNo(network.notMetered)}")
-            appendLine()
-            appendLine("MEMORY")
-            appendLine("System available: ${bytes(memory.available)}")
-            appendLine("System low memory: ${yesNo(memory.lowMemory)}")
-            appendLine()
-            appendLine("SENSORS")
-            appendLine("Total sensors: $sensors")
-            appendLine()
-            appendLine("SYSTEM TIME")
-            appendLine("Elapsed since boot: ${duration(elapsed)}")
-            appendLine()
-            appendLine("SUMMARY")
-            appendLine("Overall status: $status")
-            appendLine("Score: $score/100")
-            appendLine("Warnings: $warnings")
-            appendLine("Bad issues: $bad")
-            appendLine("Good checks: $good")
-        }
-    }
-
-    private fun buildSmartSummary(scan: ScanEntity, findings: List<Finding>): String {
-        val problemFindings = findings.filter { it.severity == Severity.BAD || it.severity == Severity.WARNING }
-        return buildString {
-            appendLine("Status: ${scan.status}")
-            appendLine("Score: ${scan.score}/100")
-            appendLine("Scan time: ${formatTime(scan.timestamp)}")
-            appendLine()
-            if (problemFindings.isEmpty()) appendLine("Problems found: none. The phone looks healthy from this scan.")
-            else {
-                appendLine("Problems found:")
-                problemFindings.forEach { appendLine("- ${it.severity}: ${it.title} - ${it.detail}") }
-            }
-        }
-    }
-
-    private fun buildChangeSummary(previous: ScanEntity?, current: ScanEntity): String {
-        if (previous == null) return "No previous Room history yet. Run another scan later and Device Doctor v4 will compare score, storage, battery temperature, network validation, and patch status."
-        val scoreDiff = current.score - previous.score
-        val storageDiff = current.storageUsedBytes - previous.storageUsedBytes
-        return buildString {
-            appendLine("Previous scan: ${formatTime(previous.timestamp)}")
-            appendLine("Current scan: ${formatTime(current.timestamp)}")
-            appendLine()
-            appendLine("Score: ${previous.score} -> ${current.score} (${signedInt(scoreDiff)})")
-            appendLine("Storage used: ${bytes(previous.storageUsedBytes)} -> ${bytes(current.storageUsedBytes)} (${signedBytes(storageDiff)})")
-            appendLine("Battery temp: ${oneDecimal(previous.batteryTempC)} C -> ${oneDecimal(current.batteryTempC)} C")
-            if (previous.securityPatch != current.securityPatch) appendLine("Security patch changed: ${previous.securityPatch} -> ${current.securityPatch}")
-            else appendLine("Security patch: unchanged (${current.securityPatch})")
-            if (previous.networkValidated != current.networkValidated) appendLine("Network validation changed: ${yesNo(previous.networkValidated)} -> ${yesNo(current.networkValidated)}")
-            else appendLine("Network validation: unchanged (${yesNo(current.networkValidated)})")
-            appendLine()
-            if (kotlin.math.abs(scoreDiff) < 3 && kotlin.math.abs(storageDiff) < 200L * 1024L * 1024L) appendLine("Overall: stable since the last scan.")
-            else if (scoreDiff > 0) appendLine("Overall: improved since the last scan.")
-            else if (scoreDiff < 0) appendLine("Overall: worse than the last scan. Check the warnings above.")
-            else appendLine("Overall: mostly unchanged.")
-        }
-    }
-
-    private fun readBattery(): BatteryData {
-        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        if (intent == null) return BatteryData()
+    private fun readBattery(): BatteryReading {
+        val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return BatteryReading()
         val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
         val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-        val tempTenths = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1)
-        val health = intent.getIntExtra(BatteryManager.EXTRA_HEALTH, -1)
-        return BatteryData(
-            percent = if (level >= 0 && scale > 0) (level * 100f / scale).toInt() else -1,
-            tempC = if (tempTenths >= 0) tempTenths / 10.0 else -1.0,
-            voltageMv = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1),
-            health = batteryHealthName(health),
-            technology = intent.getStringExtra(BatteryManager.EXTRA_TECHNOLOGY) ?: "Unknown"
+        val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+        val plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
+        return BatteryReading(
+            percent = if (scale > 0 && level in 0..scale) (level.toDouble() / scale * 100).toInt() else null,
+            // Negative temperatures are real readings; the presence of the extra determines availability.
+            temperatureC = if (intent.hasExtra(BatteryManager.EXTRA_TEMPERATURE)) {
+                (intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) / 10.0).takeIf { it in -50.0..100.0 }
+            } else null,
+            health = when (intent.getIntExtra(BatteryManager.EXTRA_HEALTH, -1)) {
+                BatteryManager.BATTERY_HEALTH_GOOD -> "Good"
+                BatteryManager.BATTERY_HEALTH_OVERHEAT -> "Overheat"
+                BatteryManager.BATTERY_HEALTH_DEAD -> "Dead"
+                BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> "Over voltage"
+                BatteryManager.BATTERY_HEALTH_UNSPECIFIED_FAILURE -> "Failure"
+                BatteryManager.BATTERY_HEALTH_COLD -> "Cold"
+                else -> null
+            },
+            voltageMv = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1).takeIf { it > 0 },
+            charging = when (status) {
+                BatteryManager.BATTERY_STATUS_FULL -> "Full"
+                BatteryManager.BATTERY_STATUS_CHARGING -> when (plugged) {
+                    BatteryManager.BATTERY_PLUGGED_USB -> "Charging · USB"
+                    BatteryManager.BATTERY_PLUGGED_AC -> "Charging · adapter"
+                    BatteryManager.BATTERY_PLUGGED_WIRELESS -> "Charging · wireless"
+                    else -> "Charging"
+                }
+                BatteryManager.BATTERY_STATUS_DISCHARGING -> "On battery"
+                BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "Not charging"
+                else -> "Unavailable"
+            },
+            technology = intent.getStringExtra(BatteryManager.EXTRA_TECHNOLOGY)?.takeIf { it.isNotBlank() }
         )
     }
 
-    private fun readStorage(): StorageData {
-        val stat = StatFs(Environment.getDataDirectory().path)
-        val block = stat.blockSizeLong
-        val total = stat.blockCountLong * block
-        val free = stat.availableBlocksLong * block
-        val used = total - free
-        return StorageData(total, used, free, if (total > 0) used * 100.0 / total else 0.0)
-    }
-
-    private fun readNetwork(): NetworkData {
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return NetworkData()
-        val network = cm.activeNetwork ?: return NetworkData()
-        val caps = cm.getNetworkCapabilities(network) ?: return NetworkData(hasNetwork = true)
-        val type = when {
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Cellular"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
-            else -> "Other"
+    companion object {
+        fun report(snapshot: DeviceSnapshot, previous: ScanEntity?): ScanReport {
+            val findings = DiagnosticRules.evaluate(snapshot)
+            val status = DiagnosticRules.status(findings)
+            val score = if (status == "UNKNOWN") -1 else DiagnosticRules.score(findings)
+            val attention = findings.count { it.needsAttention }
+            val unavailable = findings.count { it.title.contains("unavailable", ignoreCase = true) }
+            val summary = when {
+                status == "UNKNOWN" -> "Not enough readings to draw a conclusion. Review the unavailable checks."
+                attention == 0 -> "No alerts in the checks Android exposed. This snapshot cannot rule out every device problem."
+                else -> "$attention ${if (attention == 1) "check needs" else "checks need"} a closer look. Start with the findings marked Needs attention."
+            } + if (unavailable > 0) " $unavailable ${if (unavailable == 1) "reading was" else "readings were"} unavailable." else ""
+            val raw = buildString {
+                appendLine("Device Doctor ${BuildConfig.VERSION_NAME} · device report")
+                appendLine("Captured: ${formatTime(snapshot.timestamp)}")
+                appendLine("Device: ${snapshot.manufacturer} ${snapshot.model}")
+                appendLine("Android ${snapshot.androidVersion} · API ${snapshot.sdk}")
+                appendLine("Security patch: ${snapshot.securityPatch.ifBlank { "Unavailable" }}")
+                appendLine("\nSUMMARY\n$summary")
+                appendLine("Checklist score: ${if (score < 0) "Unavailable" else "$score/100"} (heuristic; not hardware health or battery capacity)")
+                appendLine("\nBATTERY")
+                appendLine("Level: ${batteryLevel(snapshot.battery.percent)} · ${snapshot.battery.charging}")
+                appendLine("Temperature: ${temperatureText(snapshot.battery.temperatureC)}")
+                appendLine("Android condition flag: ${snapshot.battery.health ?: "Unavailable"}")
+                appendLine("Voltage: ${snapshot.battery.voltageMv?.let { "$it mV" } ?: "Unavailable"}")
+                appendLine("Technology: ${snapshot.battery.technology ?: "Unavailable"}")
+                appendLine("System thermal status: ${thermalName(snapshot.thermalStatus)}")
+                appendLine("Battery saver: ${snapshot.powerSaver?.let { yesNo(it) } ?: "Unavailable"}")
+                appendLine("\nSTORAGE (data partition)")
+                snapshot.storage?.let {
+                    appendLine("Available: ${bytes(it.available)} · Used: ${bytes(it.used)} · Total: ${bytes(it.total)}")
+                } ?: appendLine("Unavailable")
+                appendLine("\nMEMORY")
+                snapshot.memory?.let {
+                    appendLine("Available: ${bytes(it.available)} of ${bytes(it.total)} · Low-memory flag: ${yesNo(it.lowMemory)}")
+                } ?: appendLine("Unavailable")
+                appendLine("\nCONNECTION")
+                snapshot.connection?.let {
+                    appendLine("Type: ${it.type} · Validated: ${yesNo(it.validated)}")
+                    appendLine("Internet capability: ${yesNo(it.internetCapable)} · Sign-in required: ${yesNo(it.captivePortal)}")
+                    appendLine("Metered: ${yesNo(it.metered)} · VPN transport: ${yesNo(it.vpn)}")
+                } ?: appendLine("Unavailable")
+                appendLine("\nSYSTEM")
+                appendLine("Secure screen lock: ${snapshot.secureLock?.let { yesNo(it) } ?: "Unavailable"}")
+                appendLine("Automatic time: ${snapshot.automaticTime?.let { yesNo(it) } ?: "Unavailable"}")
+                appendLine("Time since restart: ${duration(snapshot.uptimeMillis)}")
+                appendLine("Sensor inventory: ${snapshot.sensorCount ?: "Unavailable"}")
+                appendLine("\nFINDINGS")
+                findings.forEach { appendLine("[${it.severity}] ${it.title}\n${it.detail}\n${it.advice}\n") }
+                appendLine("Reports stay in this app until you choose to copy, save, or share them. No identifiers, SSIDs, or IP addresses are collected.")
+            }.trim()
+            val scan = ScanEntity(
+                timestamp = snapshot.timestamp, score = score, status = status,
+                androidVersion = snapshot.androidVersion, sdk = snapshot.sdk,
+                securityPatch = snapshot.securityPatch.ifBlank { "Unavailable" },
+                patchAgeDays = DiagnosticRules.patchAgeDays(snapshot.securityPatch, snapshot.timestamp) ?: -1,
+                batteryPercent = snapshot.battery.percent ?: -1,
+                batteryTempC = snapshot.battery.temperatureC ?: -273.15,
+                batteryHealth = snapshot.battery.health ?: "Unknown",
+                storageUsedBytes = snapshot.storage?.used ?: -1,
+                storageTotalBytes = snapshot.storage?.total ?: -1,
+                storageUsedPct = snapshot.storage?.usedPercent ?: -1.0,
+                networkType = snapshot.connection?.type ?: "Unavailable",
+                networkValidated = snapshot.connection?.validated ?: false,
+                thermalStatus = thermalName(snapshot.thermalStatus),
+                uptimeDays = snapshot.uptimeMillis / 86_400_000,
+                rawReport = raw
+            )
+            return ScanReport(scan, findings, summary, changes(previous, scan), raw, snapshot)
         }
-        return NetworkData(true, caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET), caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED), caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED), type)
+
+        fun changes(previous: ScanEntity?, current: ScanEntity): String = buildString {
+            if (previous == null) {
+                append("This is your baseline. Scan again after an update or cleanup to compare the readings.")
+                return@buildString
+            }
+            appendLine("Compared with ${formatTime(previous.timestamp)}")
+            if (previous.storageUsedBytes >= 0 && current.storageUsedBytes >= 0 && previous.storageTotalBytes == current.storageTotalBytes) {
+                appendLine("Storage used: ${signedBytes(current.storageUsedBytes - previous.storageUsedBytes)}")
+            } else appendLine("Storage comparison unavailable: a reading is missing or the partition size changed.")
+            appendLine("Battery temperature: ${historicalTemperature(previous)} → ${historicalTemperature(current)}")
+            appendLine(if (previous.securityPatch == current.securityPatch) "Security patch unchanged: ${current.securityPatch}"
+                else "Reported security patch changed: ${previous.securityPatch} → ${current.securityPatch}")
+            appendLine("Connection: ${previous.networkType} → ${current.networkType}")
+            appendLine("Android internet validation: ${yesNo(previous.networkValidated)} → ${yesNo(current.networkValidated)}")
+            append("A patch change records the reported date; an unchanged patch does not prove an update failed.")
+        }.trim()
     }
-
-    private fun readMemory(): MemoryData {
-        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return MemoryData()
-        val info = ActivityManager.MemoryInfo()
-        am.getMemoryInfo(info)
-        return MemoryData(info.availMem, info.lowMemory)
-    }
-
-    private fun readSensorCount(): Int {
-        val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return 0
-        return sm.getSensorList(Sensor.TYPE_ALL).size
-    }
-
-    private fun readThermalStatus(): Int {
-        if (Build.VERSION.SDK_INT < 29) return -1
-        return try { (context.getSystemService(Context.POWER_SERVICE) as PowerManager).currentThermalStatus } catch (_: Exception) { -1 }
-    }
-
-    private fun patchAgeDays(patch: String): Long {
-        return try {
-            if (patch.length < 10 || patch == "Unknown") return -1
-            val date = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { isLenient = false }.parse(patch) ?: return -1
-            val diff = System.currentTimeMillis() - date.time
-            if (diff < 0) 0 else diff / 86_400_000L
-        } catch (_: Exception) { -1 }
-    }
-
-    fun bytes(value: Long): String {
-        val gb = value / 1024.0 / 1024.0 / 1024.0
-        return if (gb >= 1) "${oneDecimal(gb)} GB" else "${oneDecimal(value / 1024.0 / 1024.0)} MB"
-    }
-
-    fun formatTime(ms: Long): String = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(ms))
-    private fun oneDecimal(value: Double): String = String.format(Locale.US, "%.1f", value)
-    private fun yesNo(value: Boolean): String = if (value) "Yes" else "No"
-    private fun signedInt(value: Int): String = if (value >= 0) "+$value" else value.toString()
-    private fun signedBytes(value: Long): String = if (value >= 0) "+${bytes(value)}" else "-${bytes(abs(value))}"
-    private fun duration(ms: Long): String { val s = ms / 1000; return "${s / 86400}d ${(s % 86400) / 3600}h ${(s % 3600) / 60}m" }
-    private fun batteryHealthName(h: Int): String = when (h) { BatteryManager.BATTERY_HEALTH_GOOD -> "Good"; BatteryManager.BATTERY_HEALTH_OVERHEAT -> "Overheat"; BatteryManager.BATTERY_HEALTH_DEAD -> "Dead"; BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> "Over voltage"; BatteryManager.BATTERY_HEALTH_UNSPECIFIED_FAILURE -> "Failure"; BatteryManager.BATTERY_HEALTH_COLD -> "Cold"; else -> "Unknown" }
-    private fun thermalStatusName(t: Int): String = when (t) { PowerManager.THERMAL_STATUS_NONE -> "None"; PowerManager.THERMAL_STATUS_LIGHT -> "Light"; PowerManager.THERMAL_STATUS_MODERATE -> "Moderate"; PowerManager.THERMAL_STATUS_SEVERE -> "Severe"; PowerManager.THERMAL_STATUS_CRITICAL -> "Critical"; PowerManager.THERMAL_STATUS_EMERGENCY -> "Emergency"; PowerManager.THERMAL_STATUS_SHUTDOWN -> "Shutdown"; else -> "Unavailable" }
-
-    private data class BatteryData(val percent: Int = -1, val tempC: Double = -1.0, val voltageMv: Int = -1, val health: String = "Unknown", val technology: String = "Unknown")
-    private data class StorageData(val total: Long = 0, val used: Long = 0, val free: Long = 0, val usedPct: Double = 0.0)
-    private data class NetworkData(val hasNetwork: Boolean = false, val hasInternet: Boolean = false, val validated: Boolean = false, val notMetered: Boolean = false, val type: String = "None")
-    private data class MemoryData(val available: Long = 0, val lowMemory: Boolean = false)
 }
+
+fun historicalTemperature(scan: ScanEntity): String =
+    if (scan.batteryTempC == -1.0 && !scan.rawReport.startsWith("Device Doctor 5.")) "Unavailable"
+    else temperatureText(scan.batteryTempC)
+
+fun readConnection(context: Context): ConnectionReading? = runCatching {
+    val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    val network = manager.activeNetwork ?: return@runCatching ConnectionReading()
+    val caps = manager.getNetworkCapabilities(network) ?: return@runCatching null
+    val vpn = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+    ConnectionReading(
+        connected = true,
+        type = when {
+            vpn -> "VPN"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Mobile data"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+            else -> "Other network"
+        },
+        validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+        internetCapable = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+        captivePortal = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL),
+        metered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED),
+        vpn = vpn
+    )
+}.getOrNull()
