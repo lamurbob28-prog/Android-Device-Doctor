@@ -42,6 +42,8 @@ class DoctorAppTest {
         val coverage = compose.onNodeWithTag("touch-count").fetchSemanticsNode().config[SemanticsProperties.Text].first().text
         assertTrue(coverage.substringBefore("/").toInt() > 0)
         screenshot("touchscreen")
+        compose.onNodeWithTag("reset-grid").assertIsDisplayed().performTouchInput { click() }
+        compose.onNodeWithTag("touch-count").assertTextContains("0/60 cells · Fingers: 0 · Peak: 0")
         compose.onNodeWithTag("close-hardware").performClick()
         compose.onNodeWithTag("tools-list").performScrollToNode(hasTestTag("tool-Display"))
         compose.onNodeWithTag("tool-Display").performClick()

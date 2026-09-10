@@ -42,8 +42,8 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun HardwareDialog(kind: String, onDismiss: () -> Unit) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize().systemBarsPadding(), color = MaterialTheme.colorScheme.background) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Surface(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(kind, Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
@@ -98,7 +98,7 @@ private fun TouchscreenTest() {
                     size = Size((width - 4.dp.toPx()).coerceAtLeast(0f), (height - 4.dp.toPx()).coerceAtLeast(0f)))
             }
         }
-        OutlinedButton(onClick = { touched = emptySet(); fingers = 0; maximumFingers = 0; resetKey++ }, modifier = Modifier.fillMaxWidth()) { Text("Reset grid") }
+        OutlinedButton(onClick = { touched = emptySet(); fingers = 0; maximumFingers = 0; resetKey++ }, modifier = Modifier.fillMaxWidth().testTag("reset-grid")) { Text("Reset grid") }
     }
 }
 
